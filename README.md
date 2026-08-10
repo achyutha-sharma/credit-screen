@@ -8,7 +8,6 @@ what it owes.
 *Free hosting, so the site sleeps when nobody is using it. If you land on a
 "wake this app up" screen, click it and give it about 30 seconds.*
 
-<!-- Screenshot goes here: drag an image into GitHub's editor and it uploads. -->
 
 ---
 
