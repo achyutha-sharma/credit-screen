@@ -250,6 +250,7 @@ with st.expander("Show the underlying figures"):
 # filing text, and is instructed to refuse rather than supply a figure that is
 # not in front of it.
 
+if not assistant.available(): st.stop()
 st.divider()
 st.subheader("Ask about these numbers")
 
