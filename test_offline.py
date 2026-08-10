@@ -663,3 +663,64 @@ def _new_ratio_checks():
 
 
 _new_ratio_checks()
+
+
+def _financial_filer_checks():
+    """Banks: suppress the ratios that do not transfer, keep the ones that do."""
+    from sec_ratios import grade
+
+    jpm_like = build("Metropolitan Bancorp", {
+        "NetIncomeLoss": usd([dur("2024-01-01", "2024-12-31", 57_000_000_000)]),
+        "RevenuesNetOfInterestExpense": usd([dur("2024-01-01", "2024-12-31", 180_000_000_000)]),
+        "StockholdersEquity": usd([inst("2024-12-31", 362_000_000_000)]),
+        "Assets": usd([inst("2024-12-31", 4_400_000_000_000)]),
+        "Liabilities": usd([inst("2024-12-31", 4_038_000_000_000)]),
+        "Deposits": usd([inst("2024-12-31", 2_400_000_000_000)]),
+        "InterestPaidNet": usd([dur("2024-01-01", "2024-12-31", 41_000_000_000)]),
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest":
+            usd([dur("2024-01-01", "2024-12-31", 72_000_000_000)]),
+        "DepreciationAmortizationAndAccretionNet": usd([dur("2024-01-01", "2024-12-31", 8_800_000_000)]),
+        "ShortTermBorrowings": usd([inst("2024-12-31", 64_000_000_000)]),
+    })
+    a = analyze(jpm_like)
+    assert a.is_financial, "bank tags did not trigger detection"
+    y = a.years[0]
+
+    # EBITDA-based ratios are refused outright, not computed and coloured.
+    for name in ("Debt / EBITDA", "EBITDA margin"):
+        assert y.values[name] is None, (name, y.ratios[name])
+        assert "do not report EBITDA" in y.ratios[name], y.ratios[name]
+
+    # Interest is the cost of revenue for a lender, so coverage has no meaning.
+    assert y.values["Interest coverage"] is None
+    assert "cost of revenue" in y.ratios["Interest coverage"]
+
+    # Leverage and ROA still show their figures, but ungraded -- a bank above
+    # 10x is the business model, and ~1% ROA is healthy.
+    for name in ("Debt / equity", "Debt / assets", "Return on assets"):
+        assert y.values[name] is None, name
+        assert y.ratios[name].endswith("n/m"), (name, y.ratios[name])
+        assert grade(name, y.values[name]) is None
+
+    # The ones that do transfer are still scored normally.
+    assert y.values["Return on equity"] is not None
+    assert grade("Return on equity", y.values["Return on equity"]) == "good"
+    assert y.values["Net profit margin"] is not None
+    assert grade("Net profit margin", y.values["Net profit margin"]) == "good"
+
+    assert any("bank or insurer" in f for f in y.flags), y.flags
+    assert any("net interest margin" in f for f in y.flags)
+
+    # An industrial with the same shape of data is untouched by any of this.
+    ind = analyze(healthy)
+    assert not ind.is_financial
+    yi = {x.label: x for x in ind.years}["FY2024"]
+    assert grade("Debt / EBITDA", yi.values["Debt / EBITDA"]) == "good"
+    assert grade("Debt / assets", yi.values["Debt / assets"]) == "watch"
+    assert yi.values["EBITDA margin"] is not None
+    assert not any("bank or insurer" in f for f in yi.flags)
+
+    print("Financial filer checks passed.")
+
+
+_financial_filer_checks()
