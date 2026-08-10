@@ -1,0 +1,18 @@
+# Theme for the deployed app, so it matches the static prototype.
+# Committed to the repo on purpose. Secrets never go in this file --
+# they go in the Streamlit Cloud dashboard, or a local
+# .streamlit/secrets.toml that .gitignore keeps out of git.
+
+[theme]
+primaryColor = "#10495B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EDF1F2"
+textColor = "#131C24"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Uploads are not used, so keep the request ceiling small.
+maxUploadSize = 5

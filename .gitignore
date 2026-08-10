@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.sec_cache/
+.streamlit/secrets.toml
+.env
+
+sec_ratios_backup.py
+sec_ratios_before_fix.py
