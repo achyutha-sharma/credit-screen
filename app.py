@@ -18,6 +18,7 @@ from sec_ratios import (
     INPUT_FIELDS,
     MANUAL,
     MISSING,
+    RATIO_GROUPS,
     RATIO_ORDER,
     WATCH,
     WEAK,
@@ -81,6 +82,10 @@ html, body, [class*="css"], .stApp{
 .matrix th:first-child{text-align:left}
 .matrix tr{border-bottom:1px solid var(--rule-2)}
 .matrix tr:last-child{border-bottom:0}
+.matrix tr.grp td{background:#F4F7F8;padding:.4rem .9rem;font-size:.63rem;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+  font-weight:700;border-top:1px solid var(--rule)}
+.matrix tr.grp:first-child td{border-top:0}
 .matrix td{padding:.45rem .5rem;vertical-align:middle}
 .matrix td.rname{padding:.7rem .9rem;min-width:180px}
 .rname b{display:block;font-weight:600;font-size:.92rem}
@@ -312,16 +317,26 @@ ordered = sorted(result.years, key=lambda y: y.period_end)
 # --------------------------------------------------------------------------
 
 MEANING = {
-    "Return on equity": "profitability",
-    "Current ratio": "short-term liquidity",
-    "Debt / equity": "balance sheet leverage",
+    "Current ratio": "bills due this year",
+    "Quick ratio": "same, minus inventory",
+    "Debt / equity": "borrowed vs owners' money",
+    "Debt / assets": "share of assets funded by debt",
+    "Debt / EBITDA": "years of earnings to repay",
+    "Debt / EBITDA (lease-adj.)": "same, counting leases",
     "Interest coverage": "can it pay the interest",
-    "Debt / EBITDA": "leverage vs cash earnings",
-    "Debt / EBITDA (lease-adj.)": "leverage including leases",
+    "Net profit margin": "profit per dollar of sales",
+    "EBITDA margin": "operating profit per dollar of sales",
+    "Return on assets": "profit per dollar of assets",
+    "Return on equity": "profit per dollar of owner money",
+    "Asset turnover": "sales per dollar of assets",
 }
 DIRECTION = {
-    "Return on equity": "↑", "Current ratio": "↑", "Interest coverage": "↑",
-    "Debt / equity": "↓", "Debt / EBITDA": "↓", "Debt / EBITDA (lease-adj.)": "↓",
+    "Current ratio": "↑", "Quick ratio": "↑", "Interest coverage": "↑",
+    "Net profit margin": "↑", "EBITDA margin": "↑",
+    "Return on assets": "↑", "Return on equity": "↑",
+    "Debt / equity": "↓", "Debt / assets": "↓",
+    "Debt / EBITDA": "↓", "Debt / EBITDA (lease-adj.)": "↓",
+    "Asset turnover": "",
 }
 
 st.markdown(
@@ -336,17 +351,24 @@ st.markdown(
 )
 
 rows_present = [r for r in RATIO_ORDER if any(r in y.ratios for y in ordered)]
+span = len(ordered) + 1
+
 body = ""
-for name in rows_present:
-    cells = ""
-    for y in ordered:
-        bucket = grade(name, y.values.get(name))
-        text = y.ratios.get(name, MISSING)
-        cells += f'<td><span class="cell {bucket or "none"}">{E(text)}</span></td>'
-    body += (
-        f'<tr><td class="rname"><b>{E(name)}</b>'
-        f'<i>{DIRECTION.get(name, "")} {E(MEANING.get(name, ""))}</i></td>{cells}</tr>'
-    )
+for group, names in RATIO_GROUPS:
+    shown = [n for n in names if n in rows_present]
+    if not shown:
+        continue
+    body += f'<tr class="grp"><td colspan="{span}">{E(group)}</td></tr>'
+    for name in shown:
+        cells = ""
+        for y in ordered:
+            bucket = grade(name, y.values.get(name))
+            text = y.ratios.get(name, MISSING)
+            cells += f'<td><span class="cell {bucket or "none"}">{E(text)}</span></td>'
+        body += (
+            f'<tr><td class="rname"><b>{E(name)}</b>'
+            f'<i>{DIRECTION.get(name, "")} {E(MEANING.get(name, ""))}</i></td>{cells}</tr>'
+        )
 
 st.markdown(
     '<div class="matrix"><table><thead><tr><th>Ratio</th>'
@@ -430,10 +452,40 @@ def reading(name: str, value: float | None, text: str) -> str:
             f"For every {D}1 of bills due within the year, there is "
             f"<b>{D}{value:,.2f} on hand</b> to pay them."
         )
+    if name == "Quick ratio":
+        return (
+            f"Excluding stock that still has to be sold, there is "
+            f"<b>{D}{value:,.2f}</b> for every {D}1 of bills due this year."
+        )
     if name == "Debt / equity":
         return (
             f"For every {D}1 the owners have in, the company owes "
             f"<b>{D}{value:,.2f} to others</b>."
+        )
+    if name == "Debt / assets":
+        return (
+            f"<b>{value * 100:,.0f}% of everything the company owns</b> is funded "
+            f"by what it owes; the rest belongs to the owners."
+        )
+    if name == "Net profit margin":
+        return (
+            f"Every {D}1 of sales leaves <b>{D}{value / 100:,.3f} of profit</b> "
+            f"once every cost is paid."
+        )
+    if name == "EBITDA margin":
+        return (
+            f"Every {D}1 of sales leaves <b>{D}{value / 100:,.3f}</b> before "
+            f"interest, tax and the cost of wearing out its assets."
+        )
+    if name == "Return on assets":
+        return (
+            f"Every {D}1 of assets the company owns generates "
+            f"<b>{D}{value / 100:,.3f} of profit</b> a year."
+        )
+    if name == "Asset turnover":
+        return (
+            f"Every {D}1 of assets produces <b>{D}{value:,.2f} of sales</b> a year. "
+            f"Not scored — a power station and a supermarket are nowhere near comparable."
         )
     if name == "Interest coverage":
         room = 100 * (1 - 1 / value) if value > 1 else 0
@@ -451,17 +503,30 @@ def reading(name: str, value: float | None, text: str) -> str:
 
 
 MEASURES = [
-    ("Return on equity", "Profit ÷ the owners’ stake", "Strong above 15% · weak below 5%"),
     ("Current ratio", "Assets due within a year ÷ bills due within a year",
      "Strong above 1.5x · weak below 1.0x"),
+    ("Quick ratio", "The same, with inventory taken out of the top",
+     "Strong above 1.0x · weak below 0.5x"),
     ("Debt / equity", "Everything owed ÷ the owners’ stake",
      "Strong below 1.0x · weak above 2.0x"),
-    ("Interest coverage", "Operating profit ÷ the annual interest bill",
-     "Strong above 4x · weak below 2x"),
+    ("Debt / assets", "Everything owed ÷ everything owned",
+     "Strong below 0.5 · weak above 0.7"),
     ("Debt / EBITDA", "Borrowings ÷ yearly earnings before interest, tax and depreciation",
      "Strong below 2.5x · weak above 4.0x"),
     ("Debt / EBITDA (lease-adj.)", "Borrowings plus leases ÷ those same earnings",
      "Strong below 3.0x · weak above 4.5x"),
+    ("Interest coverage", "Operating profit ÷ the annual interest bill",
+     "Strong above 4x · weak below 2x"),
+    ("Net profit margin", "Profit ÷ sales",
+     "Strong above 10% · weak below 3%"),
+    ("EBITDA margin", "Earnings before interest, tax and depreciation ÷ sales",
+     "Strong above 20% · weak below 8%"),
+    ("Return on assets", "Profit ÷ everything owned",
+     "Strong above 5% · weak below 1.5%"),
+    ("Return on equity", "Profit ÷ the owners’ stake",
+     "Strong above 15% · weak below 5%"),
+    ("Asset turnover", "Sales ÷ everything owned",
+     "Not scored — no universal benchmark"),
 ]
 
 latest = ordered[-1]
