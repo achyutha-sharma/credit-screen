@@ -149,6 +149,32 @@ LEASE_COMPONENTS = [
     ["OperatingLeaseLiabilityCurrent"],
 ]
 
+# Tags essentially only banks, insurers and other financial institutions file.
+# Their presence means several ratios below stop transferring: for a lender,
+# interest expense is the cost of revenue rather than a financing charge, so
+# adding it back to build EBITDA deletes the main cost line instead of
+# isolating operations. Banks do not report EBITDA and analysts do not compute
+# one for them.
+FINANCIAL_TAGS = frozenset({
+    "Deposits",
+    "InterestExpenseDeposits",
+    "InterestAndDividendIncomeOperating",
+    "RevenuesNetOfInterestExpense",
+    "LoansAndLeasesReceivableNetReportedAmount",
+    "FinancingReceivableExcludingAccruedInterestBeforeAllowanceForCreditLoss",
+    "FederalFundsSoldAndSecuritiesPurchasedUnderAgreementsToResell",
+    "PremiumsEarnedNet",
+    "LiabilityForFuturePolicyBenefit",
+    "PolicyholderFunds",
+})
+
+# What a lender is actually judged on, named in the flag so the reader is
+# pointed somewhere useful rather than just told a number is unavailable.
+FINANCIAL_MEASURES = (
+    "net interest margin, the efficiency ratio, CET1 capital, return on "
+    "tangible common equity, and loan loss provisions"
+)
+
 
 # --------------------------------------------------------------------------
 # Input schema
@@ -342,6 +368,10 @@ class FactStore:
     def _entries(self, tag: str) -> list[dict]:
         return list(self._gaap.get(tag, {}).get("units", {}).get("USD", []))
 
+    def has_any(self, tags) -> bool:
+        """True if the filer uses any of these tags at all."""
+        return any(t in self._gaap for t in tags)
+
     def instant(self, tag: str) -> dict[date, float]:
         """Balance sheet items: point-in-time, no start date."""
         rows = [e for e in self._entries(tag) if _is_annual_form(e) and not e.get("start")]
@@ -443,6 +473,7 @@ class YearResult:
 class Analysis:
     entity: str
     years: list[YearResult]
+    is_financial: bool = False
 
     @property
     def all_flags(self) -> list[str]:
@@ -764,7 +795,11 @@ def extract(facts_payload: dict, years: int = 3) -> Analysis:
 
         results.append(r)
 
-    return Analysis(entity=store.entity, years=results)
+    return Analysis(
+        entity=store.entity,
+        years=results,
+        is_financial=store.has_any(FINANCIAL_TAGS),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -795,6 +830,8 @@ def apply_overrides(analysis: Analysis, overrides: dict[str, dict[str, float | N
 
 def compute(analysis: Analysis) -> Analysis:
     """Compute ratios from whatever inputs are present, filed or manual."""
+    fin = analysis.is_financial
+
     for r in analysis.years:
         r.ratios, r.values, r.flags = {}, {}, []
         i = r.inputs
@@ -877,6 +914,11 @@ def compute(analysis: Analysis) -> Analysis:
             # small to carry meaning, and grading it red would misread a
             # buyback programme as distress.
             put("Debt / equity", None, f"{liab / eq:,.0f}x - n/m")
+        elif fin:
+            # A lender funded by deposits sits above 10x by design. The figure
+            # describes the business; scoring it against an industrial band
+            # would call every healthy bank distressed.
+            put("Debt / equity", None, f"{liab / eq:,.2f}x - n/m")
         else:
             put("Debt / equity", liab / eq, _fmt(liab / eq))
 
@@ -887,12 +929,19 @@ def compute(analysis: Analysis) -> Analysis:
         # when D/E stops being one.
         if liab is None or assets is None or assets == 0:
             put("Debt / assets", None, MISSING)
+        elif fin:
+            put("Debt / assets", None, f"{liab / assets:,.2f} - n/m")
         else:
             put("Debt / assets", liab / assets, f"{liab / assets:,.2f}")
 
         # --- Interest coverage ------------------------------------------
         src_int = r.sources.get("interest")
-        if ebit is None:
+        if fin:
+            # For a lender, interest paid to depositors is the cost of the
+            # product, not a financing charge on top of operations. Coverage
+            # compares two figures that are not separable here.
+            put("Interest coverage", None, "n/a - interest is a cost of revenue")
+        elif ebit is None:
             put("Interest coverage", None, MISSING)
         elif interest is None or interest == 0:
             put("Interest coverage", None, "n/m - no interest expense reported")
@@ -922,7 +971,9 @@ def compute(analysis: Analysis) -> Analysis:
 
         # --- Debt / EBITDA ----------------------------------------------
         ebitda = None if (ebit is None or da is None) else ebit + da
-        if ebitda is None or debt is None:
+        if fin:
+            put("Debt / EBITDA", None, "n/a - banks do not report EBITDA")
+        elif ebitda is None or debt is None:
             put("Debt / EBITDA", None, MISSING)
         elif ebitda <= 0:
             put("Debt / EBITDA", None, "n/m - negative EBITDA")
@@ -943,13 +994,19 @@ def compute(analysis: Analysis) -> Analysis:
             put("Net profit margin", 100 * ni / rev, _fmt(100 * ni / rev, "%"))
 
         ebitda_m = None if (ebit is None or da is None) else ebit + da
-        if ebitda_m is None or rev is None or rev == 0:
+        if fin:
+            put("EBITDA margin", None, "n/a - banks do not report EBITDA")
+        elif ebitda_m is None or rev is None or rev == 0:
             put("EBITDA margin", None, MISSING)
         else:
             put("EBITDA margin", 100 * ebitda_m / rev, _fmt(100 * ebitda_m / rev, "%"))
 
         if ni is None or assets is None or assets == 0:
             put("Return on assets", None, MISSING)
+        elif fin:
+            # A bank holding vast assets against thin spreads earns around 1%
+            # and is perfectly healthy. The industrial band would call that weak.
+            put("Return on assets", None, f"{100 * ni / assets:,.2f}% - n/m")
         else:
             put("Return on assets", 100 * ni / assets, _fmt(100 * ni / assets, "%"))
 
@@ -960,6 +1017,15 @@ def compute(analysis: Analysis) -> Analysis:
             put("Asset turnover", rev / assets, f"{rev / assets:,.2f}")
 
         # --- Provenance --------------------------------------------------
+        if fin:
+            r.flags.append(
+                "This is a bank or insurer, so several ratios above are left "
+                "unscored rather than computed. Interest paid to depositors is the "
+                "cost of the product, not a financing charge, which is why EBITDA "
+                "is neither reported nor meaningful here — and leverage above 10x "
+                "is the business model, not distress. Lenders are judged on "
+                f"{FINANCIAL_MEASURES}."
+            )
         derived = [
             (FIELD_LABELS[k], r.sources[k].split(": ", 1)[-1])
             for k in FIELD_KEYS
