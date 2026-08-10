@@ -1,151 +1,121 @@
-# Credit ratios from SEC filings
+# credit-screen
 
-Search a company by name or ticker, get five credit ratios across the last three
-fiscal years, colour-coded, pulled directly from SEC's XBRL structured data. No
-filing text is parsed and no market data feed is required.
+**Try it: [credit-ratios.streamlit.app](https://credit-ratios.streamlit.app)**
 
-| Ratio | Reads | Strong | Weak |
-|---|---|---|---|
-| Return on equity | Profitability | above 15% | below 5% |
-| Current ratio | Short-term liquidity | above 1.5x | below 1.0x |
-| Debt / equity | Balance sheet leverage | below 1.0x | above 2.0x |
-| Interest coverage | Ability to service interest | above 4x | below 2x |
-| Debt / EBITDA | Leverage against cash earnings | below 2.5x | above 4.0x |
+Type a company name. Get five numbers that tell you whether it can pay back
+what it owes.
 
-Price-to-earnings is deliberately absent. It prices equity; it says nothing about
-whether a borrower can repay.
+*The site is on free hosting and sleeps when nobody is using it. If you get a
+"wake this app up" screen, click it and give it about 30 seconds.*
 
-The thresholds are broad corporate rules of thumb, not standards. Normal leverage
-varies widely by industry, so a colour is a prompt to look closer rather than a
-verdict. Ratios that are suppressed as not meaningful get no colour at all.
+<!-- Drop a screenshot here: drag an image into GitHub's editor and it uploads. -->
 
-## What this handles that a naive version does not
+---
 
-The arithmetic is trivial. Getting correct inputs out of real filings is not.
+## What problem this solves
 
-**Negative equity.** Sustained buybacks can push stockholders' equity below zero.
-ROE and D/E then produce large negative numbers that look like data rather than
-nonsense. Both are suppressed and labelled, with a pointer to Debt/EBITDA.
+Every US public company has to file an annual report with the government. The
+numbers a lender cares about are in there, but they are buried in a 200-page
+document, and reading five companies means five afternoons.
 
-**Unclassified balance sheets.** Banks and insurers do not split current from
-non-current assets, so `AssetsCurrent` is simply absent. The current ratio is
-marked not applicable rather than shown as zero or missing.
+This pulls those numbers automatically and lays them out side by side.
 
-**Interest reported net.** Many filers tag `InterestIncomeExpenseNet` instead of
-gross `InterestExpense`. Netting interest income against expense shrinks the
-denominator and inflates coverage, sometimes several-fold for cash-rich issuers.
-The tool prefers gross tags, falls back only when it must, and flags the result.
+## What the five numbers mean
 
-**Quarterly figures inside annual filings.** A 10-K carries both annual and
-quarterly durations for the same tag. Filtering on form alone silently picks up
-a single quarter. Durations are checked to be roughly twelve months.
+Plain English, no finance background needed:
 
-**Restatements.** The same fiscal year appears across several filings with
-different values. Facts are deduplicated by period end, keeping the most
-recently filed figure.
+| | The question it answers |
+|---|---|
+| **Return on equity** | For every dollar the owners put in, how much profit comes back? |
+| **Current ratio** | Can the company pay the bills due this year with what it has on hand? |
+| **Debt / equity** | How much of the company is funded by borrowing versus by its owners? |
+| **Interest coverage** | How many times over can it pay the interest on its loans? |
+| **Debt / EBITDA** | If it put every dollar of earnings toward the debt, how many years to clear it? |
 
-**Tag variation.** Companies tag identical line items differently. Each metric
-resolves through an ordered chain — depreciation alone has three common variants
-— and total debt is summed from separate components rather than read from any
-single tag.
+Green means healthy, amber means keep an eye on it, red means there is a
+problem worth understanding. White means the number does not apply — which is a
+different thing from bad, and the tool is careful about the difference.
 
-**Operating leases.** Where lease liabilities are tagged, a lease-adjusted
-Debt/EBITDA is shown alongside the unadjusted figure, matching how rating
-agencies treat them. The gap is wide for retailers and airlines.
+## Where the numbers come from
 
-## The assistant
+Not from scraping the report. When a company files, it also submits every
+figure with a standard label attached, and the government publishes all of it.
+So the tool looks up labels instead of reading documents. Fast, and nothing is
+guessed.
 
-A chat panel under the ratios answers questions about the company on screen.
+## Why this is harder than dividing two numbers
 
-The design constraint is the whole point: **the model may only use the figures
-the tool extracted.** Every question is sent with a context block containing the
-ratios, the ten raw inputs, which XBRL tag produced each one, which were derived
-or hand-entered, and the thresholds behind the colours. The system prompt forbids
-stating any figure not in that block, forbids estimating a missing value, and
-requires it to name what is missing instead.
+Anyone can write the formulas. Real filings are messier than the textbook, and
+most of the work here is handling that:
 
-Without that, an unconstrained model asked "how levered is this company" will
-produce a confident number from training data that may be years stale, and the
-user cannot tell it apart from the filed figure. Grounding it in the extracted
-table is what makes the answers auditable against the table above them.
+**Sometimes a ratio is meaningless and printing it would mislead you.** Home
+Depot has bought back so much of its own stock that the owners' stake is almost
+zero on paper. Divide by almost zero and return on equity comes out at 1,450%.
+That is arithmetically correct and completely useless. The tool shows the
+figure but refuses to call it good.
 
-It also declines investment advice — the framing is credit analysis throughout:
-can this borrower service and repay its debt.
+**Banks do not have a "current ratio."** They organise their balance sheet
+differently, so there is nothing to compute. The tool says so instead of
+showing a zero.
 
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export ANTHROPIC_MODEL="claude-sonnet-5"   # optional
-```
+**Companies label the same thing differently.** Depreciation has at least three
+common labels. Nike does not label its interest expense at all. For each figure
+the tool tries a list of possible labels until one works.
 
-Everything else in the tool runs without a key; only the chat panel is disabled.
-Starter questions are generated from what is actually unusual about the company —
-negative equity prompts a different opener than an unclassified balance sheet.
+**Sometimes it can rebuild what is missing.** If total liabilities are not
+labelled but assets and equity are, it subtracts. Every rebuilt figure is
+marked as rebuilt, so you always know what came from the filing and what came
+from arithmetic.
 
-`build_context()` and `suggested_questions()` are covered by the offline tests,
-so the part that matters can be verified without spending a token.
+**And when all else fails, you can type it in.** Anything the tool cannot find,
+you enter yourself from the report. Those get flagged too. A number you typed
+is never presented as though the company filed it.
 
-## Manual entry
+That last point is the whole idea. The tool never quietly makes something up.
 
-Tag coverage is uneven, and no fallback chain covers every filer. Rather than
-dead-ending on a missing figure, every ratio is computed from ten named inputs,
-each of which can be typed in by hand:
+## What it cannot do
 
-net income · stockholders' equity · current assets · current liabilities ·
-total liabilities · operating income · depreciation & amortisation ·
-interest expense · total debt · operating lease liabilities
+- **US companies only.** Nestlé, Toyota and DHL file with their own countries,
+  not the SEC, so they will not come up.
+- **Annual reports only.** No quarterly figures.
+- **The colour thresholds are rough.** What counts as too much debt depends
+  heavily on the industry — a utility and a software company are not comparable.
+  Treat a colour as a reason to look closer, not a verdict.
+- **It is a screening tool, not an analysis.** It tells you where to look. The
+  filing tells you what is actually going on.
 
-Extraction and computation are separate steps, so overrides are just a
-substitution between them:
-
-```python
-from sec_ratios import extract, apply_overrides, compute
-
-a = extract(payload)
-a = apply_overrides(a, {"2024-12-31": {"da": 150_000_000, "interest": 75_000_000}})
-a = compute(a)
-```
-
-Fields not supplied keep their filed values. Passing `None` clears a field, so a
-wrongly-tagged figure can be removed as well as replaced. Unknown field names
-raise rather than being ignored.
-
-Provenance is preserved throughout: `year.sources` records the XBRL tag behind
-each figure, or marks it derived or hand-entered, and any year using manual
-input carries a flag naming the fields. A number typed in by an analyst is never
-presented as though it came out of the filing.
-
-## Running it
+## Running it yourself
 
 ```bash
 pip install -r requirements.txt
-export SEC_USER_AGENT="Your Name your.email@example.com"
+export SEC_USER_AGENT="Your Name your@email.com"
 streamlit run app.py
 ```
 
-SEC requires a User-Agent identifying the caller and rate-limits to about ten
-requests per second. Responses are cached to disk, so repeat lookups do not hit
-the API.
+The government requires that you say who you are when requesting data — that is
+what `SEC_USER_AGENT` is for. No account or API key needed.
 
-To check the logic without a network connection:
+To check the logic without any internet:
 
 ```bash
-python3 test_offline.py
+python test_offline.py
 ```
 
-This runs three synthetic filings — a healthy industrial, a negative-equity
-retailer, and a bank — through the full pipeline and asserts the expected
-output, including the quarterly-contamination and restatement cases.
+That runs made-up companies built to trigger every awkward case, and confirms
+the tool handles each one.
 
-## Method notes
+## What is in here
 
-Ratios use ending balance sheet values rather than period averages; averaging
-would be more precise for ROE but obscures the year-over-year comparison.
-Debt is long-term debt plus current maturities plus short-term borrowings.
-EBITDA is operating income plus depreciation and amortisation. Where total
-liabilities are untagged, they are derived as assets less equity and flagged.
+| File | What it does |
+|---|---|
+| `app.py` | The website |
+| `sec_ratios.py` | Fetching, labels, ratios, and all the special cases |
+| `assistant.py` | Optional AI chat that answers questions about the numbers |
+| `run.py` | Prints the same table in a terminal, for testing |
+| `test_offline.py` | Checks the logic with no internet needed |
+| `prototype.html` | A standalone design mockup with sample data |
 
-## Files
+---
 
-- `sec_ratios.py` — fetching, tag resolution, ratios, guard clauses
-- `app.py` — Streamlit interface
-- `test_offline.py` — synthetic-filing checks
+Built as a portfolio project. The interesting part is not the formulas — it is
+everything the tool does when a filing does not behave.
