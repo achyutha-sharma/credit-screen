@@ -52,6 +52,23 @@ TOTAL_LIABILITIES = ["Liabilities"]
 NONCURRENT_ASSETS = ["AssetsNoncurrent"]
 NONCURRENT_LIABILITIES = ["LiabilitiesNoncurrent"]
 
+# Revenue moved to the RevenueFromContractWithCustomer tags under ASC 606, but
+# older filings and plenty of current ones still use the legacy names.
+REVENUE = [
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "Revenues",
+    "SalesRevenueNet",
+    "SalesRevenueGoodsNet",
+    "RevenuesNetOfInterestExpense",
+]
+
+INVENTORY = [
+    "InventoryNet",
+    "InventoryFinishedGoodsNetOfReserves",
+    "InventoryGross",
+]
+
 # Pretax income is NOT operating income -- it sits after interest expense.
 # Kept out of the OPERATING_INCOME chain and used only to derive EBIT by
 # adding interest back, which is flagged so the reader knows it is constructed.
@@ -149,8 +166,11 @@ class InputField:
 
 INPUT_FIELDS: list[InputField] = [
     InputField("net_income", "Net income", "Bottom line, income statement"),
+    InputField("revenue", "Revenue", "Top line, income statement"),
     InputField("equity", "Stockholders' equity", "Balance sheet, period end"),
+    InputField("total_assets", "Total assets", "Everything the company owns"),
     InputField("current_assets", "Current assets", "Absent on unclassified balance sheets"),
+    InputField("inventory", "Inventory", "Zero is assumed if the filing does not tag it"),
     InputField("current_liabilities", "Current liabilities", "Absent on unclassified balance sheets"),
     InputField("total_liabilities", "Total liabilities", "Derived from assets less equity if untagged"),
     InputField("ebit", "Operating income", "EBIT, before interest and tax"),
@@ -439,14 +459,25 @@ class Analysis:
         return any(y.manual() for y in self.years)
 
 
-RATIO_ORDER = [
-    "Return on equity",
-    "Current ratio",
-    "Debt / equity",
-    "Interest coverage",
-    "Debt / EBITDA",
-    "Debt / EBITDA (lease-adj.)",
+RATIO_GROUPS: list[tuple[str, list[str]]] = [
+    ("Liquidity", ["Current ratio", "Quick ratio"]),
+    ("Leverage", [
+        "Debt / equity",
+        "Debt / assets",
+        "Debt / EBITDA",
+        "Debt / EBITDA (lease-adj.)",
+        "Interest coverage",
+    ]),
+    ("Profitability", [
+        "Net profit margin",
+        "EBITDA margin",
+        "Return on assets",
+        "Return on equity",
+    ]),
+    ("Efficiency", ["Asset turnover"]),
 ]
+
+RATIO_ORDER = [name for _, names in RATIO_GROUPS for name in names]
 
 
 def _fmt(value: float, suffix: str = "x") -> str:
@@ -464,21 +495,35 @@ def _fmt(value: float, suffix: str = "x") -> str:
 GOOD, WATCH, WEAK = "good", "watch", "weak"
 
 THRESHOLDS: dict[str, tuple[float, float, str]] = {
-    "Return on equity": (15.0, 5.0, "higher"),
     "Current ratio": (1.5, 1.0, "higher"),
+    "Quick ratio": (1.0, 0.5, "higher"),
     "Debt / equity": (1.0, 2.0, "lower"),
-    "Interest coverage": (4.0, 2.0, "higher"),
+    "Debt / assets": (0.5, 0.7, "lower"),
     "Debt / EBITDA": (2.5, 4.0, "lower"),
     "Debt / EBITDA (lease-adj.)": (3.0, 4.5, "lower"),
+    "Interest coverage": (4.0, 2.0, "higher"),
+    "Net profit margin": (10.0, 3.0, "higher"),
+    "EBITDA margin": (20.0, 8.0, "higher"),
+    "Return on assets": (5.0, 1.5, "higher"),
+    "Return on equity": (15.0, 5.0, "higher"),
+    # Asset turnover is deliberately absent. A utility runs near 0.3 and a
+    # grocer near 3.0, both perfectly healthy, so there is no honest universal
+    # band -- grading it would manufacture a verdict rather than report one.
 }
 
 THRESHOLD_NOTES: dict[str, str] = {
-    "Return on equity": "Strong above 15%, weak below 5%.",
-    "Current ratio": "Strong above 1.5x, weak below 1.0x — under 1.0 means current bills exceed current assets.",
-    "Debt / equity": "Strong below 1.0x, weak above 2.0x.",
-    "Interest coverage": "Strong above 4x, weak below 2x — under 2x is distressed territory.",
+    "Current ratio": "Strong above 1.5x, weak below 1.0x — under 1.0 means bills due this year exceed the assets on hand.",
+    "Quick ratio": "Strong above 1.0x, weak below 0.5x — the current ratio with inventory stripped out, since stock is the slowest thing to turn into cash.",
+    "Debt / equity": "Strong below 1.0x, weak above 2.0x. Banks run far higher by design.",
+    "Debt / assets": "Strong below 0.5, weak above 0.7 — the share of everything owned that is funded by what is owed.",
     "Debt / EBITDA": "Strong below 2.5x, weak above 4.0x — most loan covenants sit near 3.5x.",
-    "Debt / EBITDA (lease-adj.)": "Same idea, with leases capitalised, so the cutoffs sit higher.",
+    "Debt / EBITDA (lease-adj.)": "Same idea with leases capitalised, so the cutoffs sit higher.",
+    "Interest coverage": "Strong above 4x, weak below 2x — under 2x is distressed territory.",
+    "Net profit margin": "Strong above 10%, weak below 3%. Varies enormously by industry.",
+    "EBITDA margin": "Strong above 20%, weak below 8%. Software runs high, grocery runs thin.",
+    "Return on assets": "Strong above 5%, weak below 1.5%. Banks sit near 1% and are not comparable.",
+    "Return on equity": "Strong above 15%, weak below 5%.",
+    "Asset turnover": "Not graded — a utility near 0.3 and a grocer near 3.0 are both healthy, so there is no honest universal band.",
 }
 
 
@@ -605,8 +650,11 @@ def _sum_at(store: FactStore, chains: list[list[str]], target: date) -> tuple[fl
 
 FIELD_CHAINS = [
     ("net_income", NET_INCOME, "duration"),
+    ("revenue", REVENUE, "duration"),
     ("equity", EQUITY, "instant"),
+    ("total_assets", TOTAL_ASSETS, "instant"),
     ("current_assets", CURRENT_ASSETS, "instant"),
+    ("inventory", INVENTORY, "instant"),
     ("current_liabilities", CURRENT_LIABILITIES, "instant"),
     ("total_liabilities", TOTAL_LIABILITIES, "instant"),
     ("ebit", OPERATING_INCOME, "duration"),
@@ -646,6 +694,9 @@ def _derive(store: FactStore, r: YearResult, pe: date) -> None:
         note("total_liabilities", assets - inputs["equity"], "assets less equity")
     elif inputs.get("equity") is None and assets is not None and filed("total_liabilities") is not None:
         note("equity", assets - inputs["total_liabilities"], "assets less liabilities")
+    elif inputs.get("total_assets") is None and filed("total_liabilities") is not None and filed("equity") is not None:
+        note("total_assets", inputs["total_liabilities"] + inputs["equity"],
+             "liabilities plus equity")
 
     # Current items, where the filer split only the non-current side.
     if inputs.get("current_assets") is None and assets is not None:
@@ -754,7 +805,9 @@ def compute(analysis: Analysis) -> Analysis:
             r.ratios[name] = text
 
         ni, eq = i.get("net_income"), i.get("equity")
+        rev, assets = i.get("revenue"), i.get("total_assets")
         ca, cl = i.get("current_assets"), i.get("current_liabilities")
+        inv = i.get("inventory")
         liab, ebit = i.get("total_liabilities"), i.get("ebit")
         da, interest = i.get("da"), i.get("interest")
         debt, leases = i.get("total_debt"), i.get("lease_liabilities")
@@ -796,6 +849,24 @@ def compute(analysis: Analysis) -> Analysis:
         else:
             put("Current ratio", ca / cl, _fmt(ca / cl))
 
+        # --- Quick ratio -------------------------------------------------
+        # Inventory stripped out, since stock is the slowest current asset to
+        # turn into cash. Where the filing tags no inventory it is treated as
+        # zero -- true for most service businesses, and flagged either way so
+        # the assumption is never silent.
+        if ca is None or cl is None or cl == 0:
+            put("Quick ratio", None, "n/a - unclassified balance sheet"
+                if ca is None or cl is None else MISSING)
+        else:
+            quick = (ca - (inv or 0.0)) / cl
+            put("Quick ratio", quick, _fmt(quick))
+            if inv is None:
+                r.flags.append(
+                    "No inventory was tagged, so the quick ratio treats it as zero. "
+                    "That holds for most service businesses; for a retailer or "
+                    "manufacturer, enter the inventory figure to get a true reading."
+                )
+
         # --- Debt / equity ----------------------------------------------
         if liab is None or eq is None:
             put("Debt / equity", None, MISSING)
@@ -808,6 +879,16 @@ def compute(analysis: Analysis) -> Analysis:
             put("Debt / equity", None, f"{liab / eq:,.0f}x - n/m")
         else:
             put("Debt / equity", liab / eq, _fmt(liab / eq))
+
+        # --- Debt / assets -----------------------------------------------
+        # Unlike D/E this one survives a near-zero or negative equity line,
+        # because the denominator is everything owned rather than what is left
+        # over for owners. That makes it the readable leverage figure exactly
+        # when D/E stops being one.
+        if liab is None or assets is None or assets == 0:
+            put("Debt / assets", None, MISSING)
+        else:
+            put("Debt / assets", liab / assets, f"{liab / assets:,.2f}")
 
         # --- Interest coverage ------------------------------------------
         src_int = r.sources.get("interest")
@@ -854,6 +935,29 @@ def compute(analysis: Analysis) -> Analysis:
                     "Lease-adjusted leverage adds capitalised operating leases to debt, "
                     "as rating agencies do. It matters most for retail and airlines."
                 )
+
+        # --- Margins, returns, efficiency --------------------------------
+        if ni is None or rev is None or rev == 0:
+            put("Net profit margin", None, MISSING)
+        else:
+            put("Net profit margin", 100 * ni / rev, _fmt(100 * ni / rev, "%"))
+
+        ebitda_m = None if (ebit is None or da is None) else ebit + da
+        if ebitda_m is None or rev is None or rev == 0:
+            put("EBITDA margin", None, MISSING)
+        else:
+            put("EBITDA margin", 100 * ebitda_m / rev, _fmt(100 * ebitda_m / rev, "%"))
+
+        if ni is None or assets is None or assets == 0:
+            put("Return on assets", None, MISSING)
+        else:
+            put("Return on assets", 100 * ni / assets, _fmt(100 * ni / assets, "%"))
+
+        # Ungraded on purpose -- see THRESHOLDS. Reported, never scored.
+        if rev is None or assets is None or assets == 0:
+            put("Asset turnover", None, MISSING)
+        else:
+            put("Asset turnover", rev / assets, f"{rev / assets:,.2f}")
 
         # --- Provenance --------------------------------------------------
         derived = [
