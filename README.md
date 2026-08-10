@@ -1,4 +1,4 @@
-# credit-screen
+# **Credit-Screen**
 
 **Try it: [credit-ratios.streamlit.app](https://credit-ratios.streamlit.app)**
 
