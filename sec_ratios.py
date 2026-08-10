@@ -49,9 +49,27 @@ CURRENT_ASSETS = ["AssetsCurrent"]
 CURRENT_LIABILITIES = ["LiabilitiesCurrent"]
 TOTAL_ASSETS = ["Assets"]
 TOTAL_LIABILITIES = ["Liabilities"]
+NONCURRENT_ASSETS = ["AssetsNoncurrent"]
+NONCURRENT_LIABILITIES = ["LiabilitiesNoncurrent"]
+
+# Pretax income is NOT operating income -- it sits after interest expense.
+# Kept out of the OPERATING_INCOME chain and used only to derive EBIT by
+# adding interest back, which is flagged so the reader knows it is constructed.
+PRETAX_INCOME = [
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic",
+]
+
+# Depreciation and amortisation are sometimes tagged only as separate lines.
+DEPRECIATION_ONLY = ["Depreciation", "DepreciationNonproduction"]
+AMORTIZATION_ONLY = [
+    "AmortizationOfIntangibleAssets",
+    "AmortizationOfDeferredCharges",
+    "AmortizationOfFinancingCostsAndDiscounts",
+]
 OPERATING_INCOME = [
     "OperatingIncomeLoss",
-    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
 ]
 DA = [
     "DepreciationDepletionAndAmortization",
@@ -61,18 +79,52 @@ DA = [
 
 # InterestIncomeExpenseNet is a last resort: netting interest income against
 # expense shrinks the denominator and overstates coverage.
+# Gross interest expense first. Where a filer only reports interest net of
+# interest income, coverage is overstated -- badly so for a cash-rich issuer,
+# and the net figure can even be negative when interest income exceeds expense.
+# InterestPaidNet is cash interest off the cash flow statement: not identical to
+# accrued expense, but far closer to gross than any netted P&L line, so it is
+# preferred over the netted tags and flagged when used.
 INTEREST = [
     "InterestExpense",
     "InterestExpenseDebt",
     "InterestExpenseNonoperating",
+    "InterestExpenseBorrowings",
+    "InterestPaidNet",
+    "InterestPaid",
     "InterestIncomeExpenseNet",
+    "InterestIncomeExpenseNonoperatingNet",
 ]
-INTEREST_NETTED = "InterestIncomeExpenseNet"
+
+# Netted against interest income -- coverage from these is an upper bound.
+NETTED_INTEREST_TAGS = frozenset(
+    {"InterestIncomeExpenseNet", "InterestIncomeExpenseNonoperatingNet"}
+)
+INTEREST_NETTED = "InterestIncomeExpenseNet"  # kept for callers importing the old name
+
+# Cash paid rather than accrued expense.
+CASH_INTEREST_TAGS = frozenset({"InterestPaidNet", "InterestPaid"})
 
 DEBT_COMPONENTS = [
-    ["LongTermDebtNoncurrent", "LongTermDebt"],
-    ["LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"],
-    ["ShortTermBorrowings", "OtherShortTermBorrowings", "CommercialPaper"],
+    [
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndCapitalLeaseObligations",
+        "LongTermDebtAndFinanceLeaseObligation",
+        "LongTermDebt",
+        "OtherLongTermDebtNoncurrent",
+    ],
+    [
+        "LongTermDebtCurrent",
+        "LongTermDebtAndCapitalLeaseObligationsCurrent",
+        "LongTermDebtAndFinanceLeaseObligationCurrent",
+        "DebtCurrent",
+    ],
+    [
+        "ShortTermBorrowings",
+        "OtherShortTermBorrowings",
+        "CommercialPaper",
+        "ShortTermBankLoansAndNotesPayable",
+    ],
 ]
 DEBT_COMBINED = ["DebtLongtermAndShorttermCombinedAmount"]
 LEASE_COMPONENTS = [
@@ -166,6 +218,9 @@ class SecClient:
         if not q:
             return []
 
+        # Word-boundary match, so "NKE" does not match BRI-NKE-R or BA-NKE-RS.
+        inner = re.compile(r"\b" + re.escape(q))
+
         exact, starts, contains = [], [], []
         for row in data.values():
             entry = {
@@ -178,12 +233,21 @@ class SecClient:
                 exact.append(entry)
             elif name_l.startswith(q) or ticker_l.startswith(q):
                 starts.append(entry)
-            elif q in name_l:
+            elif inner.search(name_l):
                 contains.append(entry)
 
         starts.sort(key=lambda e: len(e["name"]))
         contains.sort(key=lambda e: len(e["name"]))
-        return (exact + starts + contains)[:limit]
+
+        # One row per filer. Preferred and multi-class shares list the same CIK
+        # under several tickers (CFR and CFR-PB); keep the plainest.
+        seen, out = set(), []
+        for e in exact + starts + contains:
+            if e["cik"] in seen:
+                continue
+            seen.add(e["cik"])
+            out.append(e)
+        return out[:limit]
 
     def cik_for_query(self, query: str) -> str:
         """Accept a ticker, a company name, or any SEC URL containing a CIK."""
@@ -253,6 +317,7 @@ class FactStore:
     def __init__(self, facts_payload: dict):
         self.entity = facts_payload.get("entityName", "Unknown filer")
         self._gaap = facts_payload.get("facts", {}).get("us-gaap", {})
+        self._cache: dict[tuple[str, str], dict[date, float]] = {}
 
     def _entries(self, tag: str) -> list[dict]:
         return list(self._gaap.get(tag, {}).get("units", {}).get("USD", []))
@@ -285,6 +350,34 @@ class FactStore:
             if series:
                 return tag, series
         return None, {}
+
+    def series(self, tag: str, kind: str) -> dict[date, float]:
+        """Cached lookup. Resolution walks chains per period now, so the same
+        tag is asked for once per year; re-filtering it each time is wasteful."""
+        key = (tag, kind)
+        if key not in self._cache:
+            self._cache[key] = self.instant(tag) if kind == "instant" else self.duration(tag)
+        return self._cache[key]
+
+    def resolve_at(
+        self, chain: list[str], kind: str, target: date
+    ) -> tuple[str | None, float | None]:
+        """First tag in the chain with a value at THIS period end.
+
+        Resolving a chain once for the whole company is wrong: filers switch
+        tags between years. A company reporting InterestExpense one year and
+        InterestExpenseNonoperating the next would show the first year and
+        blanks after it, because the winning tag has no data for later periods.
+        Walking the chain per period fixes that, and lets each year record the
+        tag it actually used.
+        """
+        for tag in chain:
+            found = self.series(tag, kind)
+            if found:
+                value = _pick(found, target)
+                if value is not None:
+                    return tag, value
+        return None, None
 
 
 def _pick(series: dict[date, float], target: date, tol_days: int = 7) -> float | None:
@@ -497,6 +590,92 @@ def _sum_components(
     return total, " + ".join(used)
 
 
+def _sum_at(store: FactStore, chains: list[list[str]], target: date) -> tuple[float | None, str]:
+    """Sum optional balance sheet components at one period end."""
+    total, used = 0.0, []
+    for chain in chains:
+        tag, value = store.resolve_at(chain, "instant", target)
+        if value is not None:
+            total += value
+            used.append(tag)
+    if not used:
+        return None, MISSING
+    return total, " + ".join(used)
+
+
+FIELD_CHAINS = [
+    ("net_income", NET_INCOME, "duration"),
+    ("equity", EQUITY, "instant"),
+    ("current_assets", CURRENT_ASSETS, "instant"),
+    ("current_liabilities", CURRENT_LIABILITIES, "instant"),
+    ("total_liabilities", TOTAL_LIABILITIES, "instant"),
+    ("ebit", OPERATING_INCOME, "duration"),
+    ("da", DA, "duration"),
+    ("interest", INTEREST, "duration"),
+]
+
+
+def _derive(store: FactStore, r: YearResult, pe: date) -> None:
+    """Fill gaps from other tagged figures, in place.
+
+    Most "missing" inputs are not actually absent from the filing -- they are
+    simply not tagged under the name the chain looked for, while the pieces
+    needed to reconstruct them are tagged. Each derivation records how it was
+    built, so a constructed figure is never mistaken for a filed one.
+
+    Order matters. Derivations read only filed values, never other derived
+    ones, so nothing compounds: equity from assets less liabilities and
+    liabilities from assets less equity can never both fire.
+    """
+    inputs, sources = r.inputs, r.sources
+
+    def filed(key: str) -> float | None:
+        """Value only if it came from a tag, not from an earlier derivation."""
+        if sources.get(key, MISSING) in (MISSING, MANUAL) or sources.get(key, "").startswith(DERIVED):
+            return None
+        return inputs.get(key)
+
+    def note(key: str, value: float, how: str) -> None:
+        inputs[key] = value
+        sources[key] = f"{DERIVED}: {how}"
+
+    _, assets = store.resolve_at(TOTAL_ASSETS, "instant", pe)
+
+    # Balance sheet identity, in whichever direction is missing.
+    if inputs.get("total_liabilities") is None and assets is not None and filed("equity") is not None:
+        note("total_liabilities", assets - inputs["equity"], "assets less equity")
+    elif inputs.get("equity") is None and assets is not None and filed("total_liabilities") is not None:
+        note("equity", assets - inputs["total_liabilities"], "assets less liabilities")
+
+    # Current items, where the filer split only the non-current side.
+    if inputs.get("current_assets") is None and assets is not None:
+        _, noncurrent = store.resolve_at(NONCURRENT_ASSETS, "instant", pe)
+        if noncurrent is not None:
+            note("current_assets", assets - noncurrent, "assets less non-current")
+
+    if inputs.get("current_liabilities") is None and inputs.get("total_liabilities") is not None:
+        _, noncurrent = store.resolve_at(NONCURRENT_LIABILITIES, "instant", pe)
+        if noncurrent is not None:
+            note("current_liabilities", inputs["total_liabilities"] - noncurrent,
+                 "liabilities less non-current")
+
+    # EBIT from pretax income by adding interest back. Pretax income sits
+    # after interest, so using it directly as EBIT understates coverage.
+    if inputs.get("ebit") is None and inputs.get("interest") is not None:
+        _, pretax = store.resolve_at(PRETAX_INCOME, "duration", pe)
+        if pretax is not None:
+            note("ebit", pretax + abs(inputs["interest"]), "pretax income plus interest")
+
+    # D&A tagged only as separate depreciation and amortisation lines.
+    if inputs.get("da") is None:
+        _, dep = store.resolve_at(DEPRECIATION_ONLY, "duration", pe)
+        _, amort = store.resolve_at(AMORTIZATION_ONLY, "duration", pe)
+        if dep is not None or amort is not None:
+            note("da", (dep or 0.0) + (amort or 0.0),
+                 "depreciation plus amortisation" if dep and amort
+                 else "depreciation only" if dep else "amortisation only")
+
+
 def extract(facts_payload: dict, years: int = 3) -> Analysis:
     """Resolve filings into raw inputs. No ratios computed yet."""
     store = FactStore(facts_payload)
@@ -510,45 +689,27 @@ def extract(facts_payload: dict, years: int = 3) -> Analysis:
 
     period_ends = sorted(net_income.keys(), reverse=True)[:years]
 
-    simple = [
-        ("net_income", NET_INCOME, "duration"),
-        ("equity", EQUITY, "instant"),
-        ("current_assets", CURRENT_ASSETS, "instant"),
-        ("current_liabilities", CURRENT_LIABILITIES, "instant"),
-        ("total_liabilities", TOTAL_LIABILITIES, "instant"),
-        ("ebit", OPERATING_INCOME, "duration"),
-        ("da", DA, "duration"),
-        ("interest", INTEREST, "duration"),
-    ]
-    resolved = {key: store.resolve(chain, kind) for key, chain, kind in simple}
-    _, assets_s = store.resolve(TOTAL_ASSETS, "instant")
-
     results = []
     for pe in period_ends:
         r = YearResult(period_end=pe)
 
-        for key, (tag, series) in resolved.items():
-            val = _pick(series, pe) if series else None
-            r.inputs[key] = val
-            r.sources[key] = tag if val is not None else MISSING
+        for key, chain, kind in FIELD_CHAINS:
+            tag, value = store.resolve_at(chain, kind, pe)
+            r.inputs[key] = value
+            r.sources[key] = tag if value is not None else MISSING
 
-        debt, debt_src = _sum_components(store, DEBT_COMPONENTS, pe)
+        debt, debt_src = _sum_at(store, DEBT_COMPONENTS, pe)
         if debt is None:
-            tag, combined = store.resolve(DEBT_COMBINED, "instant")
-            val = _pick(combined, pe) if combined else None
-            if val is not None:
-                debt, debt_src = val, tag
+            tag, value = store.resolve_at(DEBT_COMBINED, "instant", pe)
+            if value is not None:
+                debt, debt_src = value, tag
         r.inputs["total_debt"], r.sources["total_debt"] = debt, debt_src
 
-        leases, lease_src = _sum_components(store, LEASE_COMPONENTS, pe)
+        leases, lease_src = _sum_at(store, LEASE_COMPONENTS, pe)
         r.inputs["lease_liabilities"], r.sources["lease_liabilities"] = leases, lease_src
 
-        # Total liabilities is occasionally untagged; derive where possible.
-        if r.inputs["total_liabilities"] is None:
-            assets = _pick(assets_s, pe)
-            if assets is not None and r.inputs["equity"] is not None:
-                r.inputs["total_liabilities"] = assets - r.inputs["equity"]
-                r.sources["total_liabilities"] = DERIVED
+        # Reconstruct what the filing did not tag directly.
+        _derive(store, r, pe)
 
         results.append(r)
 
@@ -599,6 +760,11 @@ def compute(analysis: Analysis) -> Analysis:
         debt, leases = i.get("total_debt"), i.get("lease_liabilities")
 
         # --- Return on equity -------------------------------------------
+        # Near-zero equity is a third case, distinct from negative. Home Depot
+        # has bought back so much stock that equity is a rounding error against
+        # earnings, so ROE runs into the hundreds of percent. The figure is
+        # arithmetically real but says nothing about profitability and must not
+        # be coloured "strong" -- so it prints ungraded, with a warning.
         if ni is None or eq is None:
             put("Return on equity", None, MISSING)
         elif eq <= 0:
@@ -606,6 +772,13 @@ def compute(analysis: Analysis) -> Analysis:
             r.flags.append(
                 "Equity is negative, typically from sustained buybacks. ROE and D/E "
                 "are not meaningful; read leverage off Debt/EBITDA instead."
+            )
+        elif 100 * ni / eq > 100:
+            put("Return on equity", None, f"{100 * ni / eq:,.0f}% - n/m")
+            r.flags.append(
+                "Equity is near zero after years of buybacks, so ROE runs to several "
+                "hundred percent. The figure is real but not comparable to peers, so "
+                "it is left ungraded. Judge profitability on margins and coverage."
             )
         else:
             roe = 100 * ni / eq
@@ -628,21 +801,42 @@ def compute(analysis: Analysis) -> Analysis:
             put("Debt / equity", None, MISSING)
         elif eq <= 0:
             put("Debt / equity", None, "n/m - negative equity")
+        elif liab / eq > 20:
+            # Same near-zero-equity distortion as ROE: the denominator is too
+            # small to carry meaning, and grading it red would misread a
+            # buyback programme as distress.
+            put("Debt / equity", None, f"{liab / eq:,.0f}x - n/m")
         else:
             put("Debt / equity", liab / eq, _fmt(liab / eq))
 
         # --- Interest coverage ------------------------------------------
+        src_int = r.sources.get("interest")
         if ebit is None:
             put("Interest coverage", None, MISSING)
         elif interest is None or interest == 0:
             put("Interest coverage", None, "n/m - no interest expense reported")
+        elif interest < 0 and src_int in NETTED_INTEREST_TAGS:
+            # Net interest income exceeds net interest expense. There is no
+            # denominator here -- dividing by it would invert the meaning.
+            put("Interest coverage", None, "n/m - net interest income")
+            r.flags.append(
+                "This filer reports interest net of interest income, and the net "
+                "figure is income rather than expense, so no coverage ratio exists. "
+                "Enter gross interest expense from the filing to compute one."
+            )
         else:
             cov = ebit / abs(interest)
             put("Interest coverage", cov, _fmt(cov))
-            if r.sources.get("interest") == INTEREST_NETTED:
+            if src_int in NETTED_INTEREST_TAGS:
                 r.flags.append(
                     "Interest is reported net of interest income, so coverage is "
                     "overstated. Enter gross interest expense to correct it."
+                )
+            elif src_int in CASH_INTEREST_TAGS:
+                r.flags.append(
+                    "No gross interest expense was tagged, so coverage uses cash "
+                    "interest paid from the cash flow statement. Close, but it "
+                    "excludes accrued and non-cash interest."
                 )
 
         # --- Debt / EBITDA ----------------------------------------------
@@ -662,8 +856,17 @@ def compute(analysis: Analysis) -> Analysis:
                 )
 
         # --- Provenance --------------------------------------------------
-        if r.sources.get("total_liabilities") == DERIVED:
-            r.flags.append("Total liabilities derived as assets less equity.")
+        derived = [
+            (FIELD_LABELS[k], r.sources[k].split(": ", 1)[-1])
+            for k in FIELD_KEYS
+            if r.sources.get(k, "").startswith(DERIVED)
+        ]
+        if derived:
+            built = "; ".join(f"{name} ({how})" for name, how in derived)
+            r.flags.append(
+                f"Not tagged in the filing, so reconstructed from other figures: {built}. "
+                "Check these against the statements before quoting them."
+            )
         if r.manual():
             names = ", ".join(FIELD_LABELS[k] for k in r.manual())
             r.flags.append(f"{r.label} uses hand-entered figures for: {names}.")
