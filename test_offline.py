@@ -64,6 +64,27 @@ healthy = build(
                 inst("2024-12-31", 5_000_000_000),
             ]
         ),
+        "Assets": usd(
+            [
+                inst("2022-12-31", 10_000_000_000),
+                inst("2023-12-31", 10_800_000_000),
+                inst("2024-12-31", 11_500_000_000),
+            ]
+        ),
+        "Revenues": usd(
+            [
+                dur("2022-01-01", "2022-12-31", 12_000_000_000),
+                dur("2023-01-01", "2023-12-31", 12_800_000_000),
+                dur("2024-01-01", "2024-12-31", 13_500_000_000),
+            ]
+        ),
+        "InventoryNet": usd(
+            [
+                inst("2022-12-31", 1_200_000_000),
+                inst("2023-12-31", 1_250_000_000),
+                inst("2024-12-31", 1_300_000_000),
+            ]
+        ),
         "AssetsCurrent": usd(
             [inst("2022-12-31", 3_000_000_000), inst("2023-12-31", 3_200_000_000), inst("2024-12-31", 3_600_000_000)]
         ),
@@ -213,7 +234,7 @@ if __name__ == "__main__":
 
     # Overrides: missing before, computed after, and provenance recorded.
     s0 = analyze(sparse).years[0]
-    assert set(s0.missing()) == {"da", "interest", "total_debt", "lease_liabilities"}
+    assert {"da", "interest", "total_debt", "lease_liabilities"} <= set(s0.missing())
     assert s0.ratios["Interest coverage"] == "n/m - no interest expense reported"
 
     s1 = after.years[0]
@@ -587,3 +608,58 @@ def _derivation_checks():
 
 
 _derivation_checks()
+
+
+def _new_ratio_checks():
+    """The six added ratios, and the two that must never be graded."""
+    from sec_ratios import RATIO_GROUPS, RATIO_ORDER, grade
+
+    # analyze() returns years newest-first, so pick by label rather than
+    # position -- indexing silently gave the oldest year here.
+    y = {yr.label: yr for yr in analyze(healthy).years}["FY2024"]
+
+    assert y.ratios["Quick ratio"] == "1.05x", y.ratios          # (3600-1300)/2200
+    assert y.ratios["Debt / assets"] == "0.57", y.ratios         # 6500/11500
+    assert y.ratios["Net profit margin"] == "7.41%", y.ratios    # 1000/13500
+    assert y.ratios["EBITDA margin"] == "12.96%", y.ratios       # (1400+350)/13500
+    assert y.ratios["Return on assets"] == "8.70%", y.ratios     # 1000/11500
+    assert y.ratios["Asset turnover"] == "1.17", y.ratios        # 13500/11500
+
+    assert grade("Quick ratio", y.values["Quick ratio"]) == "good"
+    assert grade("Debt / assets", y.values["Debt / assets"]) == "watch"
+    assert grade("Net profit margin", y.values["Net profit margin"]) == "watch"
+    assert grade("Return on assets", y.values["Return on assets"]) == "good"
+
+    # Asset turnover is reported but never scored: a utility at 0.3 and a
+    # grocer at 3.0 are both healthy, so any universal band would be a lie.
+    assert y.values["Asset turnover"] is not None
+    assert grade("Asset turnover", y.values["Asset turnover"]) is None
+    assert grade("Asset turnover", 0.3) is None
+    assert grade("Asset turnover", 3.0) is None
+
+    # Quick ratio assumes no inventory when none is tagged, and says so.
+    no_inv = analyze(build("Service Co", {
+        "NetIncomeLoss": usd([dur("2024-01-01", "2024-12-31", 400_000_000)]),
+        "StockholdersEquity": usd([inst("2024-12-31", 2_000_000_000)]),
+        "Liabilities": usd([inst("2024-12-31", 1_000_000_000)]),
+        "AssetsCurrent": usd([inst("2024-12-31", 900_000_000)]),
+        "LiabilitiesCurrent": usd([inst("2024-12-31", 600_000_000)]),
+        "OperatingIncomeLoss": usd([dur("2024-01-01", "2024-12-31", 500_000_000)]),
+    })).years[0]
+    assert no_inv.ratios["Quick ratio"] == no_inv.ratios["Current ratio"] == "1.50x"
+    assert any("inventory" in f.lower() for f in no_inv.flags), no_inv.flags
+
+    # Debt / assets stays readable where D/E collapses on negative equity.
+    neg = analyze(negative_equity).years[0]
+    assert neg.values["Debt / equity"] is None
+    assert neg.values["Debt / assets"] is not None, neg.ratios
+    assert grade("Debt / assets", neg.values["Debt / assets"]) is not None
+
+    # Grouping covers every ratio exactly once, in display order.
+    grouped = [n for _, names in RATIO_GROUPS for n in names]
+    assert grouped == RATIO_ORDER
+    assert len(set(grouped)) == len(grouped) == 12
+    print("New ratio checks passed.")
+
+
+_new_ratio_checks()
