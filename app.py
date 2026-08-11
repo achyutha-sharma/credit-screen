@@ -51,7 +51,7 @@ st.markdown(
 
 :root{
   --ink:#131C24; --ink-2:#4A5A66; --ink-3:#8595A0;
-  --rule:#D9E0E4; --rule-2:#EBEFF1; --card:#FFFFFF; --paper:#E9EDEF;
+  --rule:#D9E0E4; --rule-2:#EBEFF1; --card:#FFFFFF; --paper:#E4E5E6;
   --accent:#10495B; --accent-soft:#E4EEF1;
   --good-fg:#216B48; --good-bg:#DDEBE2; --good-bar:#4E9670;
   --watch-fg:#83600F; --watch-bg:#F6ECD0; --watch-bar:#C69A2E;
@@ -178,6 +178,20 @@ td.sx b{font-family:var(--mono);font-weight:600;color:var(--accent)}
 .figs td.src.der{color:var(--watch-fg)}
 .figs td.src.gap{color:var(--ink-3);font-style:italic}
 
+/* ---------- empty state ---------- */
+.pitch{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5rem;
+  margin:1.8rem 0 .4rem;padding-top:1.5rem;border-top:1px solid var(--rule);
+  animation:rise .5s cubic-bezier(.22,.8,.3,1) both}
+.pi{min-width:0}
+.pn{display:block;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;
+  font-weight:700;color:var(--accent);margin-bottom:.45rem;line-height:1.5}
+.pi p{margin:0;font-size:.87rem;color:var(--ink-2);line-height:1.55}
+.pi em{font-style:normal;color:var(--ink)}
+.pi .m{font-family:var(--mono);font-size:.85em;color:var(--ink)}
+.pi:nth-child(2){animation-delay:.06s}
+.pi:nth-child(3){animation-delay:.12s}
+@media (max-width:720px){.pitch{grid-template-columns:1fr;gap:1.2rem}}
+
 /* ---------- motion ---------- */
 @keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -256,7 +270,8 @@ st.markdown(
 )
 st.markdown(
     '<p class="lede">Type a company name to pull its last three annual reports '
-    "and work out whether it can service what it owes.</p>",
+    "and work out whether it can service what it owes. Every number comes with a "
+    "plain sentence saying what it means, so no finance background is needed.</p>",
     unsafe_allow_html=True,
 )
 
@@ -295,6 +310,30 @@ def profile(cik: str) -> dict:
 query = st.text_input("Company name or ticker", placeholder="Home Depot").strip()
 
 if not query:
+    st.markdown(
+        """
+<div class="pitch">
+  <div class="pi">
+    <span class="pn">It says what the number means</span>
+    <p>Most tools show you <span class="m">1.30x</span> and stop. This one adds:
+    <em>for every &#36;1 the owners have in, the company owes &#36;1.30 to
+    others.</em></p>
+  </div>
+  <div class="pi">
+    <span class="pn">It refuses to mislead you</span>
+    <p>A bank has no current ratio and does not report EBITDA. Where a ratio does
+    not apply, it says so — rather than printing a number that looks fine and
+    means nothing.</p>
+  </div>
+  <div class="pi">
+    <span class="pn">It shows its work</span>
+    <p>Every figure names the label the company filed it under. Anything the tool
+    rebuilt, or you typed in yourself, is marked as such.</p>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
     st.caption("Try Home Depot, Nike, or JPMorgan.")
     st.stop()
 
