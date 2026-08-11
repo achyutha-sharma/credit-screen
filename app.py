@@ -16,6 +16,7 @@ import assistant
 from sec_ratios import (
     GOOD,
     RATIO_DIRECTION,
+    Analysis,
     compare,
     INPUT_FIELDS,
     MANUAL,
@@ -32,6 +33,9 @@ from sec_ratios import (
 )
 
 st.set_page_config(page_title="Credit Screen", layout="centered")
+
+HISTORY_YEARS = 10   # fetched, and drawn in the sparklines
+SHOWN_YEARS = 3      # columns in the table
 
 # --------------------------------------------------------------------------
 # Look
@@ -175,6 +179,11 @@ div[data-testid="stExpander"]{border-color:var(--rule)}
 .pc.better{background:var(--good-bg);color:var(--good-fg)}
 .pc.worse{background:var(--weak-bg);color:var(--weak-fg)}
 .pc.in-line,.pc.flat{background:transparent;color:var(--ink-2)}
+td.trend, th.trend{text-align:right;padding:.35rem .8rem .35rem .5rem;
+  border-left:1px solid var(--rule-2);width:1%;white-space:nowrap}
+th.trend{font-size:.6rem}
+.spark{display:block;overflow:visible;opacity:.85}
+tr:hover .spark{opacity:1}
 td.med{text-align:right;font-family:var(--mono);font-size:.85rem;
   color:var(--ink-3);padding:.45rem .9rem;border-left:1px solid var(--rule)}
 .chip.better{background:var(--good-bg);color:var(--good-fg)}
@@ -263,7 +272,10 @@ else:
 try:
     with st.spinner(f"Fetching {chosen['ticker']} filings"):
         payload = fetch(chosen["cik"])
-    base = extract(payload)
+    # Pull a decade, show three. The extra years cost nothing -- they are
+    # already in the payload we downloaded -- and they give the sparklines
+    # something worth tracing. A twelve-column table would be unreadable.
+    base = extract(payload, years=HISTORY_YEARS)
 except ValueError as e:
     st.warning(str(e))
     st.stop()
@@ -271,7 +283,7 @@ except Exception as e:
     st.error(f"Could not load filings: {e}")
     st.stop()
 
-years = sorted(base.years, key=lambda y: y.period_end)
+years = sorted(base.years, key=lambda y: y.period_end)[-SHOWN_YEARS:]
 
 
 def widget_key(year_key: str, field_key: str) -> str:
@@ -331,8 +343,14 @@ for y in years:
     if changed:
         overrides[y.key] = changed
 
-result = compute(apply_overrides(base, overrides))
-ordered = sorted(result.years, key=lambda y: y.period_end)
+full = compute(apply_overrides(base, overrides))
+history = sorted(full.years, key=lambda y: y.period_end)
+ordered = history[-SHOWN_YEARS:]
+
+# Everything downstream -- ratios, explanations, peers, the assistant -- reads
+# the recent window. Only the sparklines use the full decade, so a long history
+# never bloats the table or the context sent to the model.
+result = Analysis(entity=full.entity, years=ordered, is_financial=full.is_financial)
 
 # --------------------------------------------------------------------------
 # 4. The ratio matrix
@@ -378,7 +396,45 @@ st.markdown(
 )
 
 rows_present = [r for r in RATIO_ORDER if any(r in y.ratios for y in ordered)]
-span = len(ordered) + 1
+span = len(ordered) + 2
+
+
+def sparkline(name: str, points: list, width: int = 76, height: int = 22) -> str:
+    """Inline SVG trend across every year we have, not just the three shown.
+
+    Drawn on its own scale, so it reports shape rather than level -- the level
+    is already in the cells beside it. Fewer than three usable points earns no
+    chart, because two dots joined by a line is a shape the data does not
+    support.
+    """
+    vals = [(i, y.values.get(name)) for i, y in enumerate(points)]
+    usable = [(i, v) for i, v in vals if v is not None]
+    if len(usable) < 3:
+        return ""
+
+    lo = min(v for _, v in usable)
+    hi = max(v for _, v in usable)
+    rng = (hi - lo) or 1.0
+    last_i = len(points) - 1
+
+    def xy(i: int, v: float) -> tuple[float, float]:
+        x = 1 + (i / max(last_i, 1)) * (width - 2)
+        y = height - 3 - ((v - lo) / rng) * (height - 6)
+        return round(x, 1), round(y, 1)
+
+    pts = " ".join(f"{x},{y}" for x, y in (xy(i, v) for i, v in usable))
+    fx, fy = xy(*usable[-1])
+    good = grade(name, usable[-1][1])
+    dot = {"good": "var(--good-bar)", "watch": "var(--watch-bar)",
+           "weak": "var(--weak-bar)"}.get(good, "var(--ink-3)")
+    return (
+        f'<svg class="spark" viewBox="0 0 {width} {height}" width="{width}" '
+        f'height="{height}" aria-hidden="true">'
+        f'<polyline points="{pts}" fill="none" stroke="var(--ink-3)" '
+        f'stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"/>'
+        f'<circle cx="{fx}" cy="{fy}" r="2.1" fill="{dot}"/></svg>'
+    )
+
 
 body = ""
 for group, names in RATIO_GROUPS:
@@ -394,12 +450,14 @@ for group, names in RATIO_GROUPS:
             cells += f'<td><span class="cell {bucket or "none"}">{E(text)}</span></td>'
         body += (
             f'<tr><td class="rname"><b>{E(name)}</b>'
-            f'<i>{DIRECTION.get(name, "")} {E(MEANING.get(name, ""))}</i></td>{cells}</tr>'
+            f'<i>{DIRECTION.get(name, "")} {E(MEANING.get(name, ""))}</i></td>{cells}'
+            f'<td class="trend">{sparkline(name, history)}</td></tr>'
         )
 
 st.markdown(
     '<div class="matrix"><table><thead><tr><th>Ratio</th>'
     + "".join(f"<th>{E(y.label)}</th>" for y in ordered)
+    + f'<th class="trend">{len(history)}-yr trend</th>'
     + f"</tr></thead><tbody>{body}</tbody></table></div>",
     unsafe_allow_html=True,
 )
