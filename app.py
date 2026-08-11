@@ -64,15 +64,19 @@ html, body, [class*="css"], .stApp{
 .stApp{background:var(--paper)}
 .block-container{
   max-width:920px; background:var(--card); border:1px solid var(--rule);
-  border-radius:6px; padding:2.4rem 2.6rem 3.2rem; margin-top:2.2rem;
+  border-radius:6px; padding:2.6rem 2.6rem 3.2rem; margin-top:3.2rem;
   margin-bottom:3rem; box-shadow:0 1px 2px rgba(19,28,36,.05),
   0 8px 24px -12px rgba(19,28,36,.10);
 }
 /* Tables sit on the card, so they carry a rule rather than their own fill. */
 .matrix, .extable{background:transparent}
 @media (max-width:720px){
-  .block-container{padding:1.5rem 1.1rem 2.2rem; border-radius:0;
-    border-left:0; border-right:0; margin-top:0}
+  /* Streamlit pins a toolbar to the top on mobile; without room for it the
+     masthead sits underneath and is clipped. */
+  .block-container{padding:1.6rem 1.1rem 2.2rem; border-radius:0;
+    border-left:0; border-right:0; margin-top:3.4rem; margin-bottom:0}
+  .mast{padding-bottom:.7rem}
+  .mast .mark{font-size:1.15rem}
 }
 
 /* masthead */
@@ -178,20 +182,6 @@ td.sx b{font-family:var(--mono);font-weight:600;color:var(--accent)}
 .figs td.src.der{color:var(--watch-fg)}
 .figs td.src.gap{color:var(--ink-3);font-style:italic}
 
-/* ---------- empty state ---------- */
-.pitch{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5rem;
-  margin:1.8rem 0 .4rem;padding-top:1.5rem;border-top:1px solid var(--rule);
-  animation:rise .5s cubic-bezier(.22,.8,.3,1) both}
-.pi{min-width:0}
-.pn{display:block;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;
-  font-weight:700;color:var(--accent);margin-bottom:.45rem;line-height:1.5}
-.pi p{margin:0;font-size:.87rem;color:var(--ink-2);line-height:1.55}
-.pi em{font-style:normal;color:var(--ink)}
-.pi .m{font-family:var(--mono);font-size:.85em;color:var(--ink)}
-.pi:nth-child(2){animation-delay:.06s}
-.pi:nth-child(3){animation-delay:.12s}
-@media (max-width:720px){.pitch{grid-template-columns:1fr;gap:1.2rem}}
-
 /* ---------- motion ---------- */
 @keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -270,8 +260,7 @@ st.markdown(
 )
 st.markdown(
     '<p class="lede">Type a company name to pull its last three annual reports '
-    "and work out whether it can service what it owes. Every number comes with a "
-    "plain sentence saying what it means, so no finance background is needed.</p>",
+    "and work out whether it can service what it owes.</p>",
     unsafe_allow_html=True,
 )
 
@@ -310,30 +299,6 @@ def profile(cik: str) -> dict:
 query = st.text_input("Company name or ticker", placeholder="Home Depot").strip()
 
 if not query:
-    st.markdown(
-        """
-<div class="pitch">
-  <div class="pi">
-    <span class="pn">It says what the number means</span>
-    <p>Most tools show you <span class="m">1.30x</span> and stop. This one adds:
-    <em>for every &#36;1 the owners have in, the company owes &#36;1.30 to
-    others.</em></p>
-  </div>
-  <div class="pi">
-    <span class="pn">It refuses to mislead you</span>
-    <p>A bank has no current ratio and does not report EBITDA. Where a ratio does
-    not apply, it says so — rather than printing a number that looks fine and
-    means nothing.</p>
-  </div>
-  <div class="pi">
-    <span class="pn">It shows its work</span>
-    <p>Every figure names the label the company filed it under. Anything the tool
-    rebuilt, or you typed in yourself, is marked as such.</p>
-  </div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
     st.caption("Try Home Depot, Nike, or JPMorgan.")
     st.stop()
 
@@ -352,9 +317,15 @@ if not matches:
 
 if len(matches) == 1:
     chosen = matches[0]
+    st.caption(f"Matched {chosen['name']} ({chosen['ticker']})")
 else:
+    # Shown whenever there is more than one candidate, so a near-miss on the
+    # name is one click from the right filer rather than a retyped search.
     chosen = st.selectbox(
-        "Which company?", matches, format_func=lambda m: f"{m['name']} ({m['ticker']})"
+        "Did you mean",
+        matches,
+        format_func=lambda m: f"{m['name']} · {m['ticker']}",
+        label_visibility="collapsed",
     )
 
 # --------------------------------------------------------------------------
