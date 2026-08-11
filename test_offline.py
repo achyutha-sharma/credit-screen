@@ -724,3 +724,84 @@ def _financial_filer_checks():
 
 
 _financial_filer_checks()
+
+
+def _peer_comparison_checks():
+    """Standing against the peer median, and the caveats that must surface."""
+    from sec_ratios import BETTER, INLINE, WORSE, compare, standing
+
+    # Direction matters: for leverage, lower beats the median.
+    assert standing("Return on equity", 20.0, 10.0) == BETTER
+    assert standing("Return on equity", 5.0, 10.0) == WORSE
+    assert standing("Debt / EBITDA", 1.0, 3.0) == BETTER
+    assert standing("Debt / EBITDA", 5.0, 3.0) == WORSE
+    # Small gaps are noise, not signal.
+    assert standing("Current ratio", 1.52, 1.50) == INLINE
+    assert standing("Current ratio", None, 1.5) is None
+    assert standing("Current ratio", 1.5, None) is None
+    # Asset turnover has no absolute band but does have a direction.
+    assert standing("Asset turnover", 2.0, 1.0) == BETTER
+
+    def firm(name, ni, rev, eq, assets, liab, ebit, da, interest, debt):
+        return build(name, {
+            "NetIncomeLoss": usd([dur("2024-01-01", "2024-12-31", ni)]),
+            "Revenues": usd([dur("2024-01-01", "2024-12-31", rev)]),
+            "StockholdersEquity": usd([inst("2024-12-31", eq)]),
+            "Assets": usd([inst("2024-12-31", assets)]),
+            "Liabilities": usd([inst("2024-12-31", liab)]),
+            "AssetsCurrent": usd([inst("2024-12-31", assets * 0.3)]),
+            "LiabilitiesCurrent": usd([inst("2024-12-31", assets * 0.2)]),
+            "OperatingIncomeLoss": usd([dur("2024-01-01", "2024-12-31", ebit)]),
+            "DepreciationDepletionAndAmortization": usd([dur("2024-01-01", "2024-12-31", da)]),
+            "InterestExpense": usd([dur("2024-01-01", "2024-12-31", interest)]),
+            "LongTermDebtNoncurrent": usd([inst("2024-12-31", debt)]),
+        })
+
+    # Same industry, three sizes. The subject is the most levered.
+    subject = analyze(firm("BIG BOX RETAIL, INC.", 1_000, 20_000, 3_000, 15_000,
+                           12_000, 1_600, 400, 300, 7_000))
+    peer_a = analyze(firm("MIDMARKET STORES CORP", 900, 18_000, 6_000, 14_000,
+                          8_000, 1_500, 380, 150, 3_000))
+    peer_b = analyze(firm("VALUE MART CO", 800, 17_000, 7_000, 13_500,
+                          6_500, 1_400, 360, 120, 2_500))
+
+    c = compare([subject, peer_a, peer_b])
+    assert c.names[0] == "Big Box Retail", c.names
+    assert len(c.names) == 3 and len(c.rows) >= 8
+
+    by_ratio = {r.ratio: r for r in c.rows}
+
+    # Subject carries far more debt, so leverage reads worse than the median.
+    assert by_ratio["Debt / EBITDA"].cells[0].standing == WORSE
+    assert by_ratio["Debt / EBITDA"].cells[2].standing == BETTER
+    assert by_ratio["Debt / equity"].cells[0].standing == WORSE
+
+    # Asset turnover now gets a standing even though it has no absolute grade.
+    from sec_ratios import grade
+    turn = by_ratio["Asset turnover"]
+    assert grade("Asset turnover", turn.cells[0].value) is None
+    assert turn.cells[0].standing is not None
+    assert turn.median_text != "--"
+
+    # Two-company sets are called out, three-company sets are not.
+    assert not any("only two companies" in n for n in c.notes), c.notes
+    pair = compare([subject, peer_a])
+    assert any("only two companies" in n for n in pair.notes), pair.notes
+
+    # Mixing a bank into the set is flagged as not comparable.
+    bank = analyze(build("METROPOLITAN BANCORP", {
+        "NetIncomeLoss": usd([dur("2024-01-01", "2024-12-31", 12_000)]),
+        "RevenuesNetOfInterestExpense": usd([dur("2024-01-01", "2024-12-31", 40_000)]),
+        "StockholdersEquity": usd([inst("2024-12-31", 90_000)]),
+        "Assets": usd([inst("2024-12-31", 900_000)]),
+        "Liabilities": usd([inst("2024-12-31", 810_000)]),
+        "Deposits": usd([inst("2024-12-31", 600_000)]),
+        "OperatingIncomeLoss": usd([dur("2024-01-01", "2024-12-31", 15_000)]),
+    }))
+    mixed = compare([subject, peer_a, bank])
+    assert any("bank or insurer" in n for n in mixed.notes), mixed.notes
+
+    print("Peer comparison checks passed.")
+
+
+_peer_comparison_checks()
