@@ -220,6 +220,12 @@ def fetch(cik: str) -> dict:
     return client.company_facts(cik)
 
 
+@st.cache_data(show_spinner=False)
+def profile(cik: str) -> dict:
+    """Registration details, including the SEC's industry code. Never raises."""
+    return client.company_profile(cik)
+
+
 # --------------------------------------------------------------------------
 # 1. Find the company
 # --------------------------------------------------------------------------
@@ -359,8 +365,13 @@ st.markdown(
     f'<div class="co"><h2>{E(result.entity)}</h2><div class="meta">'
     + "".join(
         f"<span>{E(t)}</span>"
-        for t in (chosen["ticker"], f"CIK {chosen['cik']}",
-                  f"{ordered[0].label}–{ordered[-1].label}", "Form 10-K")
+        for t in filter(None, (
+            chosen["ticker"],
+            f"CIK {chosen['cik']}",
+            f"{ordered[0].label}–{ordered[-1].label}",
+            (lambda p: f"SIC {p['sic']} · {p['industry']}" if p.get("sic") else None)(
+                profile(chosen["cik"])),
+        ))
     )
     + "</div></div>",
     unsafe_allow_html=True,
@@ -448,6 +459,15 @@ with st.expander("Where these numbers came from"):
 # question without inventing a band, because the industry cancels out.
 
 st.markdown('<div class="explain"><h3>Compare with peers</h3></div>', unsafe_allow_html=True)
+
+subject_profile = profile(chosen["cik"])
+if subject_profile.get("industry"):
+    st.caption(
+        f"The SEC classifies this filer as **{subject_profile['industry']}** "
+        f"(SIC {subject_profile['sic']}). Companies with the same code are the "
+        "ones worth comparing against."
+    )
+
 peer_query = st.text_input(
     "Peer companies",
     placeholder="Lowes, Target",
@@ -457,7 +477,7 @@ peer_query = st.text_input(
 
 if peer_query.strip():
     wanted = [p.strip() for p in peer_query.split(",") if p.strip()][:4]
-    peers, unresolved = [], []
+    peers, unresolved, off_industry = [], [], []
     for term in wanted:
         hits = search(term)
         if not hits or hits[0]["cik"] == chosen["cik"]:
@@ -467,6 +487,16 @@ if peer_query.strip():
             peers.append(compute(extract(fetch(hits[0]["cik"]))))
         except Exception:
             unresolved.append(term)
+            continue
+        # Different SIC does not make a comparison wrong, but it is worth
+        # knowing before reading a margin gap as a performance difference.
+        pp = profile(hits[0]["cik"])
+        if (
+            subject_profile.get("sic")
+            and pp.get("sic")
+            and pp["sic"] != subject_profile["sic"]
+        ):
+            off_industry.append(f"{hits[0]['ticker']} is {pp['industry']}")
 
     if unresolved:
         st.caption("Could not use: " + ", ".join(unresolved))
@@ -508,6 +538,13 @@ if peer_query.strip():
         )
         for note in comp.notes:
             st.caption(note)
+        if off_industry:
+            st.caption(
+                "Different SEC industry code: "
+                + "; ".join(off_industry)
+                + ". Still worth comparing, but a margin gap may be the business "
+                "model rather than performance."
+            )
     elif not unresolved:
         st.caption("No peers found.")
 
