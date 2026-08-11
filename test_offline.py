@@ -835,3 +835,52 @@ def _profile_checks():
 
 
 _profile_checks()
+
+
+def _fuzzy_search_checks():
+    """Typos, spacing and punctuation should all still find the filer."""
+    import json, pathlib, tempfile
+    from sec_ratios import SecClient, _norm
+
+    assert _norm("JPMORGAN CHASE & CO") == "jpmorganchaseco"
+    assert _norm("AT&T INC.") == "attinc"
+    assert _norm("jp morgan") == "jpmorgan"
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    rows = [
+        (320187, "NKE", "NIKE, Inc."),
+        (354950, "HD", "HOME DEPOT, INC."),
+        (19617, "JPM", "JPMORGAN CHASE & CO"),
+        (732717, "T", "AT&T INC."),
+        (789019, "MSFT", "MICROSOFT CORP"),
+        (703351, "EAT", "BRINKER INTERNATIONAL, INC"),
+    ]
+    (tmp / "company_tickers.json").write_text(json.dumps(
+        {str(i): {"cik_str": c, "ticker": t, "title": n} for i, (c, t, n) in enumerate(rows)}))
+    c = SecClient(user_agent="test test@example.com", cache_dir=tmp)
+
+    first = lambda q: (c.search(q) or [{}])[0].get("ticker")
+
+    # Punctuation and spacing the user will not reproduce exactly.
+    assert first("jp morgan") == "JPM"
+    assert first("jpmorgan chase") == "JPM"
+    assert first("at&t") == "T"
+    assert first("att") == "T"
+
+    # Partial names.
+    assert first("home depo") == "HD"
+    assert first("microsoft") == "MSFT"
+
+    # Typos, including a transposition.
+    assert first("nkie") == "NKE", c.search("nkie")
+    assert first("microsft") == "MSFT"
+
+    # The fuzzy tier must not resurrect the substring bug: NKE is not BRINKER.
+    assert [h["ticker"] for h in c.search("NKE")] == ["NKE"]
+    # And it must still refuse nonsense rather than returning the nearest thing.
+    assert c.search("qqzzxx") == []
+
+    print("Fuzzy search checks passed.")
+
+
+_fuzzy_search_checks()
