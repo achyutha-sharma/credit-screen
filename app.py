@@ -15,6 +15,7 @@ import streamlit as st
 import assistant
 from sec_ratios import (
     GOOD,
+    THRESHOLDS,
     RATIO_DIRECTION,
     Analysis,
     compare,
@@ -165,6 +166,38 @@ td.sx b{font-family:var(--mono);font-weight:600;color:var(--accent)}
 .figs td.src.man{color:var(--accent);font-weight:600}
 .figs td.src.der{color:var(--watch-fg)}
 .figs td.src.gap{color:var(--ink-3);font-style:italic}
+
+/* hero: covenant headroom */
+.hero{display:grid;grid-template-columns:1fr 1fr;gap:1.6rem;margin:1.4rem 0 .3rem;
+  padding:1.2rem 1.3rem;background:var(--card);border:1px solid var(--rule);
+  border-radius:3px}
+.band{min-width:0}
+.bhead{display:flex;align-items:baseline;gap:.6rem;margin-bottom:.5rem}
+.bname{font-size:.66rem;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600}
+.bval{margin-left:auto;font-family:var(--mono);font-size:1.35rem;font-weight:600;
+  letter-spacing:-.02em;color:var(--ink)}
+.bval.good{color:var(--good-fg)} .bval.watch{color:var(--watch-fg)}
+.bval.weak{color:var(--weak-fg)}
+.track{position:relative;height:12px;border-radius:2px;overflow:hidden;
+  background:var(--rule-2)}
+.z{position:absolute;top:0;bottom:0}
+.z.good{background:var(--good-bg)} .z.watch{background:var(--watch-bg)}
+.z.weak{background:var(--weak-bg)}
+.move{position:absolute;top:50%;height:2px;transform:translateY(-50%);
+  background:var(--ink-3);opacity:.5}
+.from{position:absolute;top:2px;bottom:2px;width:2px;margin-left:-1px;
+  background:var(--ink-3);opacity:.45;border-radius:1px}
+.tick{position:absolute;top:-3px;bottom:-3px;width:1px;margin-left:-.5px;
+  background:var(--ink);opacity:.55}
+.now{position:absolute;top:-3px;bottom:-3px;width:3px;margin-left:-1.5px;
+  background:var(--ink);border-radius:2px;
+  box-shadow:0 0 0 2px var(--card)}
+.bfoot{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.45rem;
+  font-family:var(--mono);font-size:.63rem;color:var(--ink-3)}
+.delta{margin-left:auto;font-weight:600}
+.delta.up{color:var(--good-fg)} .delta.down{color:var(--weak-fg)}
+@media (max-width:640px){.hero{grid-template-columns:1fr;gap:1.2rem}}
 
 /* streamlit widget tuning */
 .stTextInput input, .stNumberInput input{font-family:var(--mono)}
@@ -394,6 +427,83 @@ st.markdown(
     + "</div></div>",
     unsafe_allow_html=True,
 )
+
+# --------------------------------------------------------------------------
+# 4a. Headroom — the hero
+# --------------------------------------------------------------------------
+# The question a credit committee actually asks is not "what is the ratio" but
+# "how close is this to the line, and which way is it going". Two bands answer
+# that at a glance: leverage against the level most loan agreements test, and
+# coverage against the level below which interest stops being comfortably paid.
+
+STRIP = [
+    ("Debt / EBITDA", 6.0, 3.5, "typical covenant"),
+    ("Interest coverage", 12.0, 2.0, "distress line"),
+]
+
+
+def zones(name: str, scale: float) -> str:
+    """Coloured bands behind the marker, taken from the same thresholds the
+    cells use, so the strip and the table can never disagree."""
+    strong, weak, direction = THRESHOLDS[name]
+    if direction == "lower":
+        cuts = [(0, strong, "good"), (strong, weak, "watch"), (weak, scale, "weak")]
+    else:
+        cuts = [(0, weak, "weak"), (weak, strong, "watch"), (strong, scale, "good")]
+    out = ""
+    for lo, hi, cls in cuts:
+        x = min(lo, scale) / scale * 100
+        w = (min(hi, scale) - min(lo, scale)) / scale * 100
+        if w > 0:
+            out += f'<div class="z {cls}" style="left:{x:.2f}%;width:{w:.2f}%"></div>'
+    return out
+
+
+def headroom(name: str, scale: float, marker: float, marker_label: str) -> str:
+    now = ordered[-1].values.get(name)
+    then = ordered[0].values.get(name) if len(ordered) > 1 else None
+    if now is None:
+        return ""
+
+    pos = lambda v: max(0.0, min(v / scale, 1.0)) * 100
+    moved = ""
+    if then is not None and abs(then - now) / max(abs(now), 1e-9) > 0.02:
+        a, b = sorted((pos(then), pos(now)))
+        moved = (
+            f'<div class="from" style="left:{pos(then):.2f}%"></div>'
+            f'<div class="move" style="left:{a:.2f}%;width:{b - a:.2f}%"></div>'
+        )
+
+    arrow = ""
+    if then is not None:
+        better = (THRESHOLDS[name][2] == "lower") == (now < then)
+        if abs(then - now) / max(abs(now), 1e-9) > 0.02:
+            arrow = (
+                f'<span class="delta {"up" if better else "down"}">'
+                f'{"improving" if better else "worsening"} from {then:,.2f}'
+                f'{"x" if "%" not in ordered[-1].ratios.get(name, "") else "%"}'
+                f' in {ordered[0].label}</span>'
+            )
+
+    return (
+        f'<div class="band"><div class="bhead"><span class="bname">{E(name)}</span>'
+        f'<span class="bval {grade(name, now) or ""}">'
+        f'{E(ordered[-1].ratios.get(name, ""))}</span></div>'
+        f'<div class="track">{zones(name, scale)}{moved}'
+        f'<div class="tick" style="left:{pos(marker):.2f}%"></div>'
+        f'<div class="now" style="left:{pos(now):.2f}%"></div></div>'
+        f'<div class="bfoot"><span>{marker_label} at {marker:g}x</span>{arrow}</div></div>'
+    )
+
+
+if not result.is_financial:
+    bands = "".join(
+        headroom(n, scale, mark, label)
+        for n, scale, mark, label in STRIP
+        if ordered[-1].values.get(n) is not None
+    )
+    if bands:
+        st.markdown(f'<div class="hero">{bands}</div>', unsafe_allow_html=True)
 
 rows_present = [r for r in RATIO_ORDER if any(r in y.ratios for y in ordered)]
 span = len(ordered) + 2
