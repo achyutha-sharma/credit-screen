@@ -15,6 +15,8 @@ import streamlit as st
 import assistant
 from sec_ratios import (
     GOOD,
+    RATIO_DIRECTION,
+    compare,
     INPUT_FIELDS,
     MANUAL,
     MISSING,
@@ -164,6 +166,20 @@ td.sx b{font-family:var(--mono);font-weight:600;color:var(--accent)}
 .stTextInput input, .stNumberInput input{font-family:var(--mono)}
 .stButton button{border-radius:3px}
 div[data-testid="stExpander"]{border-color:var(--rule)}
+
+.matrix th .per{font-family:var(--mono);font-size:.6rem;color:var(--ink-3);
+  font-weight:400;letter-spacing:0;text-transform:none}
+.pc{display:block;padding:.45rem .65rem;border-radius:2px;font-family:var(--mono);
+  font-size:.95rem;font-variant-numeric:tabular-nums;text-align:right;
+  white-space:nowrap;font-weight:500}
+.pc.better{background:var(--good-bg);color:var(--good-fg)}
+.pc.worse{background:var(--weak-bg);color:var(--weak-fg)}
+.pc.in-line,.pc.flat{background:transparent;color:var(--ink-2)}
+td.med{text-align:right;font-family:var(--mono);font-size:.85rem;
+  color:var(--ink-3);padding:.45rem .9rem;border-left:1px solid var(--rule)}
+.chip.better{background:var(--good-bg);color:var(--good-fg)}
+.chip.worse{background:var(--weak-bg);color:var(--weak-fg)}
+.chip.flat{border:1px solid var(--rule);color:var(--ink-2)}
 </style>
 """,
     unsafe_allow_html=True,
@@ -425,11 +441,78 @@ with st.expander("Where these numbers came from"):
     )
 
 # --------------------------------------------------------------------------
-# 6. What the numbers mean
+# 6. Peers
 # --------------------------------------------------------------------------
+# Absolute thresholds cannot honestly score a margin or an asset turnover --
+# what counts as good depends on the industry. A peer set answers the same
+# question without inventing a band, because the industry cancels out.
+
+st.markdown('<div class="explain"><h3>Compare with peers</h3></div>', unsafe_allow_html=True)
+peer_query = st.text_input(
+    "Peer companies",
+    placeholder="Lowes, Target",
+    help="Names or tickers, separated by commas. Two or three works best.",
+    label_visibility="collapsed",
+)
+
+if peer_query.strip():
+    wanted = [p.strip() for p in peer_query.split(",") if p.strip()][:4]
+    peers, unresolved = [], []
+    for term in wanted:
+        hits = search(term)
+        if not hits or hits[0]["cik"] == chosen["cik"]:
+            unresolved.append(term)
+            continue
+        try:
+            peers.append(compute(extract(fetch(hits[0]["cik"]))))
+        except Exception:
+            unresolved.append(term)
+
+    if unresolved:
+        st.caption("Could not use: " + ", ".join(unresolved))
+
+    if peers:
+        comp = compare([result] + peers)
+        head = "".join(
+            f"<th>{E(n)}<br><span class='per'>{E(p)}</span></th>"
+            for n, p in zip(comp.names, comp.periods)
+        )
+        rows_p = ""
+        for group, names in RATIO_GROUPS:
+            shown = [r for r in comp.rows if r.ratio in names]
+            if not shown:
+                continue
+            rows_p += f'<tr class="grp"><td colspan="{len(comp.names) + 2}">{E(group)}</td></tr>'
+            for row in shown:
+                cells = "".join(
+                    f'<td><span class="pc {c.standing.replace(" ", "-") if c.standing else "flat"}">'
+                    f"{E(c.text)}</span></td>"
+                    for c in row.cells
+                )
+                rows_p += (
+                    f'<tr><td class="rname"><b>{E(row.ratio)}</b></td>{cells}'
+                    f'<td class="med">{E(row.median_text)}</td></tr>'
+                )
+        st.markdown(
+            f'<div class="matrix"><table><thead><tr><th>Ratio</th>{head}'
+            f"<th>Median</th></tr></thead><tbody>{rows_p}</tbody></table></div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="legend"><span class="chip better">better</span>'
+            '<span class="chip flat">in line</span>'
+            '<span class="chip worse">worse</span>'
+            "<span>&nbsp;against the median of the companies shown, not a fixed "
+            "threshold — so the industry cancels out.</span></div>",
+            unsafe_allow_html=True,
+        )
+        for note in comp.notes:
+            st.caption(note)
+    elif not unresolved:
+        st.caption("No peers found.")
 
 # --------------------------------------------------------------------------
-# 6. What the numbers mean
+# 7. What the numbers mean
 # --------------------------------------------------------------------------
 # The third column is worked from this company's own latest figure, because a
 # number you can read as a sentence about a real business is understood far
