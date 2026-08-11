@@ -15,24 +15,25 @@ import streamlit as st
 import assistant
 from sec_ratios import (
     GOOD,
-    RATIO_DIRECTION,
-    Analysis,
-    compare,
     INPUT_FIELDS,
     MANUAL,
     MISSING,
+    RATIO_DIRECTION,
     RATIO_GROUPS,
     RATIO_ORDER,
     WATCH,
     WEAK,
+    Analysis,
     SecClient,
     apply_overrides,
+    compare,
     compute,
     extract,
     grade,
+    to_csv,
 )
 
-st.set_page_config(page_title="Credit Screen", layout="centered")
+st.set_page_config(page_title="Credit Screen", page_icon="📊", layout="centered")
 
 HISTORY_YEARS = 10   # fetched, and drawn in the sparklines
 SHOWN_YEARS = 3      # columns in the table
@@ -212,6 +213,14 @@ div[data-testid="stTextInput"]:first-of-type input{
   border:1px solid #CBD8DD;font-size:1.02rem;padding:.85rem 1rem}
 div[data-testid="stTextInput"]:first-of-type input:focus{
   background:var(--card);border-color:transparent}
+
+/* ---------- footer ---------- */
+.foot{margin-top:2.6rem;padding-top:1.2rem;border-top:1px solid var(--rule);
+  font-size:.8rem;color:var(--ink-2);display:flex;flex-direction:column;gap:.5rem}
+.foot a{color:var(--accent);text-decoration:none;font-weight:600;
+  border-bottom:1px solid transparent;transition:border-color .15s ease}
+.foot a:hover{border-bottom-color:var(--accent)}
+.fnote{font-size:.73rem;color:var(--ink-3);max-width:72ch}
 
 /* ---------- motion ---------- */
 @keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
@@ -641,6 +650,14 @@ if result.all_flags:
 # 5. The underlying figures
 # --------------------------------------------------------------------------
 
+st.download_button(
+    "Download as CSV",
+    data=to_csv(result, ticker=chosen["ticker"], cik=chosen["cik"]),
+    file_name=f"{chosen['ticker'].lower()}-credit-ratios.csv",
+    mime="text/csv",
+    help="Ratios, the figures behind them, and the source of each one.",
+)
+
 with st.expander("Where these numbers came from"):
     latest = ordered[-1]
     rows = ""
@@ -896,50 +913,70 @@ st.caption(
 # 7. Assistant, only when a key is configured
 # --------------------------------------------------------------------------
 
-if not assistant.available():
-    st.stop()
+if assistant.available():
+    st.divider()
+    st.subheader("Ask about these numbers")
+    st.caption(
+        "Answers come only from the figures above. The assistant cannot look anything "
+        "up, and will say so when the tool did not find something."
+    )
 
-st.divider()
-st.subheader("Ask about these numbers")
-st.caption(
-    "Answers come only from the figures above. The assistant cannot look anything "
-    "up, and will say so when the tool did not find something."
+    thread_key = f"chat_{chosen['cik']}"
+    history = st.session_state.setdefault(thread_key, [])
+
+    pending = None
+    if not history:
+        cols = st.columns(2)
+        for n, q in enumerate(assistant.suggested_questions(result)):
+            if cols[n % 2].button(q, key=f"sq{n}"):
+                pending = q
+
+    for turn in history:
+        with st.chat_message(turn["role"]):
+            st.markdown(turn["content"])
+
+    question = st.chat_input("e.g. is this much debt a problem for a retailer?") or pending
+
+    if question:
+        with st.chat_message("user"):
+            st.markdown(question)
+        with st.chat_message("assistant"):
+            try:
+                with st.spinner("Reading the figures"):
+                    answer = assistant.ask(
+                        result, question, history=history,
+                        ticker=chosen["ticker"], cik=chosen["cik"],
+                    )
+                st.markdown(answer)
+                history.append({"role": "user", "content": question})
+                history.append({"role": "assistant", "content": answer})
+            except Exception as e:
+                st.error(f"The assistant could not answer: {e}")
+
+    if history and st.button("Clear conversation"):
+        st.session_state[thread_key] = []
+        st.rerun()
+
+    st.caption("Credit analysis only — not investment advice.")
+
+# --------------------------------------------------------------------------
+# 9. Who made this
+# --------------------------------------------------------------------------
+
+st.markdown(
+    """
+<div class="foot">
+  <div>
+    Built by <a href="https://www.linkedin.com/in/achyutha-sharma-74a94634a/"
+    target="_blank" rel="noopener">Achyutha Sharma</a> ·
+    <a href="https://github.com/achyutha-sharma/credit-screen"
+    target="_blank" rel="noopener">source on GitHub</a>
+  </div>
+  <div class="fnote">
+    Figures come from XBRL tags in filed 10-Ks. Ratios use ending balance sheet
+    values, not period averages. A screening tool, not investment advice.
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
 )
-
-thread_key = f"chat_{chosen['cik']}"
-history = st.session_state.setdefault(thread_key, [])
-
-pending = None
-if not history:
-    cols = st.columns(2)
-    for n, q in enumerate(assistant.suggested_questions(result)):
-        if cols[n % 2].button(q, key=f"sq{n}"):
-            pending = q
-
-for turn in history:
-    with st.chat_message(turn["role"]):
-        st.markdown(turn["content"])
-
-question = st.chat_input("e.g. is this much debt a problem for a retailer?") or pending
-
-if question:
-    with st.chat_message("user"):
-        st.markdown(question)
-    with st.chat_message("assistant"):
-        try:
-            with st.spinner("Reading the figures"):
-                answer = assistant.ask(
-                    result, question, history=history,
-                    ticker=chosen["ticker"], cik=chosen["cik"],
-                )
-            st.markdown(answer)
-            history.append({"role": "user", "content": question})
-            history.append({"role": "assistant", "content": answer})
-        except Exception as e:
-            st.error(f"The assistant could not answer: {e}")
-
-if history and st.button("Clear conversation"):
-    st.session_state[thread_key] = []
-    st.rerun()
-
-st.caption("Credit analysis only — not investment advice.")
