@@ -1292,3 +1292,68 @@ def compare(analyses: list[Analysis]) -> PeerComparison:
             "ratio reads as better or worse. Add a third for a steadier picture."
         )
     return comp
+
+
+# --------------------------------------------------------------------------
+# Export
+# --------------------------------------------------------------------------
+
+
+def to_csv(analysis: Analysis, ticker: str = "", cik: str = "") -> str:
+    """The whole analysis as CSV: ratios, inputs, and where each figure came from.
+
+    The source column travels with the export on purpose. A spreadsheet of bare
+    numbers loses the one thing that makes these trustworthy -- whether a figure
+    was filed, reconstructed, or typed in by hand.
+    """
+    import csv
+    import io
+    from datetime import date as _date
+
+    years = sorted(analysis.years, key=lambda y: y.period_end)
+    labels = [y.label for y in years]
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+
+    w.writerow(["Credit Screen - ratio export"])
+    w.writerow(["Company", analysis.entity])
+    if ticker:
+        w.writerow(["Ticker", ticker])
+    if cik:
+        w.writerow(["CIK", cik])
+    w.writerow(["Periods", *labels])
+    w.writerow(["Filing", "Form 10-K"])
+    w.writerow(["Source", "SEC XBRL company facts"])
+    w.writerow(["Exported", _date.today().isoformat()])
+    w.writerow([])
+
+    w.writerow(["Ratios"])
+    w.writerow(["Group", "Ratio", *labels, f"Standing ({labels[-1]})"])
+    for group, names in RATIO_GROUPS:
+        for name in names:
+            if not any(name in y.ratios for y in years):
+                continue
+            w.writerow([
+                group, name,
+                *[y.ratios.get(name, MISSING) for y in years],
+                grade(name, years[-1].values.get(name)) or "not scored",
+            ])
+    w.writerow([])
+
+    w.writerow(["Inputs ($ millions)"])
+    w.writerow(["Figure", *labels, f"Source ({labels[-1]})"])
+    for f in INPUT_FIELDS:
+        w.writerow([
+            f.label,
+            *["" if y.inputs.get(f.key) is None else round(y.inputs[f.key] / 1e6)
+              for y in years],
+            years[-1].sources.get(f.key, MISSING),
+        ])
+
+    if analysis.all_flags:
+        w.writerow([])
+        w.writerow(["Notes"])
+        for flag in analysis.all_flags:
+            w.writerow([flag])
+
+    return buf.getvalue()
