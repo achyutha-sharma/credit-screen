@@ -75,17 +75,20 @@ html, body, [class*="css"], .stApp{
      masthead sits underneath and is clipped. */
   .block-container{padding:1.6rem 1.1rem 2.2rem; border-radius:0;
     border-left:0; border-right:0; margin-top:3.4rem; margin-bottom:0}
-  .mast{padding-bottom:.7rem}
-  .mast .mark{font-size:1.15rem}
+  .mark{font-size:1.15rem}
 }
 
 /* masthead */
-.mast{display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap;
-  border-bottom:2px solid var(--ink);padding-bottom:.9rem;margin-bottom:1.1rem}
-.mast .mark{font-size:1.3rem;font-weight:700;letter-spacing:-.02em}
-.mast .mark span{color:var(--accent)}
-.mast .tag{font-size:.68rem;letter-spacing:.13em;text-transform:uppercase;
-  color:var(--ink-3);font-weight:600}
+.mark{font-size:1.3rem;font-weight:700;letter-spacing:-.02em;line-height:1.2}
+.mark span{color:var(--accent)}
+.tag{font-size:.68rem;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600;margin-top:.15rem}
+.rule{border-bottom:2px solid var(--ink);margin:.7rem 0 1.1rem}
+div[data-testid="stPopover"] button{border:1px solid var(--rule);
+  background:var(--card);color:var(--ink-2);font-size:.78rem;font-weight:600;
+  border-radius:3px;padding:.3rem .7rem}
+div[data-testid="stPopover"] button:hover{border-color:var(--accent);
+  color:var(--accent)}
 .lede{color:var(--ink-2);font-size:.95rem;max-width:62ch;margin:0 0 .4rem}
 
 /* company head */
@@ -253,11 +256,60 @@ td.med{text-align:right;font-family:var(--mono);font-size:.85rem;
 
 E = html.escape
 
-st.markdown(
-    '<div class="mast"><span class="mark">Credit<span>Screen</span></span>'
-    '<span class="tag">Ratios from SEC filings</span></div>',
-    unsafe_allow_html=True,
-)
+ABOUT = """
+#### What this does differently
+
+**It says what each number means.** Most tools show you `1.30x` and stop. Here
+every ratio comes with a sentence built from the company's own figures — *for
+every $1 the owners have in, the company owes $1.30 to others.*
+
+**It refuses to mislead you.** Some ratios are meaningless for some companies,
+and printing them anyway is worse than leaving them out.
+
+- A bank has no current ratio and does not report EBITDA. Interest paid to
+  depositors is the cost of the product, not a financing charge, so those rows
+  are left unscored rather than filled with a number that looks fine.
+- Home Depot has bought back so much stock that the owners' stake is nearly
+  zero. Return on equity comes out above 1,000% — arithmetically true, and
+  useless. The figure is shown but never graded.
+- Asset turnover is never scored at all. A power utility runs near 0.3 and a
+  supermarket near 3.0, both perfectly healthy, so any universal threshold
+  would just report the industry back to you as a verdict.
+
+**It shows its work.** Every figure names the label the company filed it under.
+Anything rebuilt from other figures is marked as rebuilt, and anything you
+typed in yourself is flagged as yours. A number you entered is never presented
+as though the company filed it.
+
+**Nothing is quietly invented.** Where a label is missing the tool tries a list
+of alternatives, then tries to reconstruct the figure from others, then asks
+you. Each step is visible in the source column.
+
+**Peers instead of arbitrary lines.** Comparing against two or three real
+competitors scores a margin or a turnover honestly, because the industry
+cancels out — no invented benchmark required.
+
+---
+
+Data comes straight from the SEC's structured filing data. No third-party
+feeds, nothing scraped, nothing estimated. US filers only, annual reports only.
+
+A screening tool, not an analysis — it tells you where to look. The filing
+tells you what is actually going on.
+"""
+
+
+_mast, _about = st.columns([5, 1], vertical_alignment="bottom")
+with _mast:
+    st.markdown(
+        '<div class="mark">Credit<span>Screen</span></div>'
+        '<div class="tag">Ratios from SEC filings</div>',
+        unsafe_allow_html=True,
+    )
+with _about:
+    with st.popover("About"):
+        st.markdown(ABOUT)
+st.markdown('<div class="rule"></div>', unsafe_allow_html=True)
 st.markdown(
     '<p class="lede">Type a company name to pull its last three annual reports '
     "and work out whether it can service what it owes.</p>",
@@ -818,7 +870,7 @@ pending = None
 if not history:
     cols = st.columns(2)
     for n, q in enumerate(assistant.suggested_questions(result)):
-        if cols[n % 2].button(q, key=f"sq{n}", use_container_width=True):
+        if cols[n % 2].button(q, key=f"sq{n}"):
             pending = q
 
 for turn in history:
