@@ -1084,3 +1084,147 @@ def inputs_table(analysis: Analysis) -> tuple[list[str], list[list[str]]]:
             cells.append("--" if v is None else f"{v / 1e6:,.0f}")
         rows.append([f.label] + cells + [years[-1].sources.get(f.key, MISSING)])
     return header, rows
+
+
+# --------------------------------------------------------------------------
+# Peer comparison
+# --------------------------------------------------------------------------
+# Absolute thresholds cannot honestly grade a margin or an asset turnover,
+# because what counts as good depends on the industry. A peer set answers the
+# same question without inventing a band: compare the borrower to companies
+# that face the same economics, and the industry cancels out.
+
+# Which way is better, used only for standing against peers. Distinct from
+# THRESHOLDS, which is about absolute levels -- asset turnover appears here
+# because more sales per dollar of assets is genuinely better within a peer
+# group, even though no universal cut-off exists.
+RATIO_DIRECTION: dict[str, str] = {
+    "Current ratio": "higher",
+    "Quick ratio": "higher",
+    "Debt / equity": "lower",
+    "Debt / assets": "lower",
+    "Debt / EBITDA": "lower",
+    "Debt / EBITDA (lease-adj.)": "lower",
+    "Interest coverage": "higher",
+    "Net profit margin": "higher",
+    "EBITDA margin": "higher",
+    "Return on assets": "higher",
+    "Return on equity": "higher",
+    "Asset turnover": "higher",
+}
+
+BETTER, INLINE, WORSE = "better", "in line", "worse"
+
+# Below this the gap is noise rather than signal, so the standing reads "in
+# line" instead of manufacturing a distinction from a rounding difference.
+PEER_TOLERANCE = 0.10
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    s = sorted(values)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def standing(name: str, value: float | None, median: float | None) -> str | None:
+    """Where one company sits against the peer median for this ratio."""
+    if value is None or median is None or median == 0:
+        return None
+    gap = (value - median) / abs(median)
+    if abs(gap) < PEER_TOLERANCE:
+        return INLINE
+    better_when_higher = RATIO_DIRECTION.get(name, "higher") == "higher"
+    return BETTER if (gap > 0) == better_when_higher else WORSE
+
+
+@dataclass
+class PeerCell:
+    text: str
+    value: float | None = None
+    standing: str | None = None
+
+
+@dataclass
+class PeerRow:
+    ratio: str
+    cells: list[PeerCell]
+    median_text: str = "--"
+
+
+@dataclass
+class PeerComparison:
+    names: list[str]
+    periods: list[str]
+    rows: list[PeerRow]
+    notes: list[str] = field(default_factory=list)
+
+
+def _short(entity: str) -> str:
+    """Trim the legal suffix so column headers stay narrow."""
+    head = entity.split(",")[0]
+    for suffix in (" INC", " CORP", " CORPORATION", " CO", " PLC", " LTD", " LLC", " & CO"):
+        if head.upper().endswith(suffix):
+            head = head[: -len(suffix)]
+    return head.strip().title() or entity
+
+
+def compare(analyses: list[Analysis]) -> PeerComparison:
+    """Latest year of each company, side by side, scored against the median.
+
+    The first analysis is the subject; the rest are peers. Standing is measured
+    against the median of everyone shown, which is stable with small sets and
+    not thrown by one outlier the way a mean would be.
+    """
+    if not analyses:
+        raise ValueError("Nothing to compare.")
+
+    latest = [max(a.years, key=lambda y: y.period_end) for a in analyses]
+    comp = PeerComparison(
+        names=[_short(a.entity) for a in analyses],
+        periods=[y.label for y in latest],
+        rows=[],
+    )
+
+    for name in RATIO_ORDER:
+        if not any(name in y.ratios for y in latest):
+            continue
+        values = [y.values.get(name) for y in latest]
+        med = _median([v for v in values if v is not None])
+        cells = [
+            PeerCell(
+                text=y.ratios.get(name, MISSING),
+                value=v,
+                standing=standing(name, v, med),
+            )
+            for y, v in zip(latest, values)
+        ]
+        row = PeerRow(ratio=name, cells=cells)
+        if med is not None:
+            row.median_text = (
+                f"{med:,.2f}%" if "margin" in name.lower() or name.startswith("Return")
+                else f"{med:,.2f}"
+            )
+        comp.rows.append(row)
+
+    # Things that would quietly distort the read.
+    if len({y.label for y in latest}) > 1:
+        comp.notes.append(
+            "Fiscal years do not line up across these companies, so the columns "
+            "cover slightly different periods."
+        )
+    kinds = {a.is_financial for a in analyses}
+    if len(kinds) > 1:
+        comp.notes.append(
+            "This set mixes a bank or insurer with ordinary companies. They are "
+            "not comparable on leverage or margins; read only the ratios that "
+            "carry a figure for every column."
+        )
+    graded = sum(1 for r in comp.rows for c in r.cells if c.standing)
+    if len(analyses) < 3 and graded:
+        comp.notes.append(
+            "With only two companies the median sits between them, so every "
+            "ratio reads as better or worse. Add a third for a steadier picture."
+        )
+    return comp
