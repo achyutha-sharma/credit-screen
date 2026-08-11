@@ -805,3 +805,33 @@ def _peer_comparison_checks():
 
 
 _peer_comparison_checks()
+
+
+def _profile_checks():
+    """SIC lookup: parsed when present, silent when the endpoint fails."""
+    import json, pathlib, tempfile
+    from sec_ratios import SecClient
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    (tmp / "sub_0000354950.json").write_text(json.dumps({
+        "name": "HOME DEPOT, INC.",
+        "sic": "5211",
+        "sicDescription": "Retail-Lumber & Other Building Materials Dealers",
+        "fiscalYearEnd": "0131",
+        "exchanges": ["NYSE"],
+        "filings": {"recent": {"form": ["10-K"] * 500}},   # the bulky part
+    }))
+    c = SecClient(user_agent="test test@example.com", cache_dir=tmp)
+
+    p = c.company_profile("0000354950")
+    assert p["sic"] == "5211", p
+    assert "Lumber" in p["industry"]
+    assert p["fiscal_year_end"] == "0131"
+    assert "filings" not in p, "profile must not carry the filing history"
+
+    # A filer with no submissions file must not break the page.
+    assert c.company_profile("0000000000") == {}
+    print("Profile checks passed.")
+
+
+_profile_checks()
