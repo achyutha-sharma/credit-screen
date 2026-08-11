@@ -27,6 +27,7 @@ from typing import Iterable
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 
 DEFAULT_UA = os.environ.get("SEC_USER_AGENT", "ratio-tool your.email@example.com")
 CACHE_DIR = Path(os.environ.get("SEC_CACHE_DIR", Path.home() / ".sec_cache"))
@@ -307,6 +308,28 @@ class SecClient:
 
     def company_facts(self, cik: str) -> dict:
         return self._get_json(FACTS_URL.format(cik=cik), f"facts_{cik}.json")
+
+    def company_profile(self, cik: str) -> dict:
+        """Registration details, including the SEC's industry classification.
+
+        SIC is the SEC's own code for what a filer does -- Home Depot is 5211,
+        "Retail-Lumber & Other Building Materials". Useful for judging whether
+        two companies belong in the same peer set, which the tool otherwise has
+        no way to check.
+
+        Never raises. A missing profile costs a caption, not the page.
+        """
+        try:
+            d = self._get_json(SUBMISSIONS_URL.format(cik=cik), f"sub_{cik}.json")
+        except Exception:
+            return {}
+        return {
+            "name": d.get("name", ""),
+            "sic": str(d.get("sic") or ""),
+            "industry": d.get("sicDescription") or "",
+            "fiscal_year_end": d.get("fiscalYearEnd") or "",
+            "exchanges": d.get("exchanges") or [],
+        }
 
     def facts_for_ticker(self, ticker: str) -> dict:
         return self.company_facts(self.cik_for_ticker(ticker))
