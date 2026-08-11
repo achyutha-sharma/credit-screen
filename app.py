@@ -15,7 +15,6 @@ import streamlit as st
 import assistant
 from sec_ratios import (
     GOOD,
-    THRESHOLDS,
     RATIO_DIRECTION,
     Analysis,
     compare,
@@ -52,7 +51,7 @@ st.markdown(
 
 :root{
   --ink:#131C24; --ink-2:#4A5A66; --ink-3:#8595A0;
-  --rule:#D9E0E4; --rule-2:#EBEFF1; --card:#FFFFFF;
+  --rule:#D9E0E4; --rule-2:#EBEFF1; --card:#FFFFFF; --paper:#E9EDEF;
   --accent:#10495B; --accent-soft:#E4EEF1;
   --good-fg:#216B48; --good-bg:#DDEBE2; --good-bar:#4E9670;
   --watch-fg:#83600F; --watch-bg:#F6ECD0; --watch-bar:#C69A2E;
@@ -62,7 +61,19 @@ st.markdown(
 html, body, [class*="css"], .stApp{
   font-family:'Archivo',system-ui,-apple-system,sans-serif; color:var(--ink);
 }
-.block-container{padding-top:2.6rem; max-width:900px}
+.stApp{background:var(--paper)}
+.block-container{
+  max-width:920px; background:var(--card); border:1px solid var(--rule);
+  border-radius:6px; padding:2.4rem 2.6rem 3.2rem; margin-top:2.2rem;
+  margin-bottom:3rem; box-shadow:0 1px 2px rgba(19,28,36,.05),
+  0 8px 24px -12px rgba(19,28,36,.10);
+}
+/* Tables sit on the card, so they carry a rule rather than their own fill. */
+.matrix, .extable{background:transparent}
+@media (max-width:720px){
+  .block-container{padding:1.5rem 1.1rem 2.2rem; border-radius:0;
+    border-left:0; border-right:0; margin-top:0}
+}
 
 /* masthead */
 .mast{display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap;
@@ -167,37 +178,46 @@ td.sx b{font-family:var(--mono);font-weight:600;color:var(--accent)}
 .figs td.src.der{color:var(--watch-fg)}
 .figs td.src.gap{color:var(--ink-3);font-style:italic}
 
-/* hero: covenant headroom */
-.hero{display:grid;grid-template-columns:1fr 1fr;gap:1.6rem;margin:1.4rem 0 .3rem;
-  padding:1.2rem 1.3rem;background:var(--card);border:1px solid var(--rule);
-  border-radius:3px}
-.band{min-width:0}
-.bhead{display:flex;align-items:baseline;gap:.6rem;margin-bottom:.5rem}
-.bname{font-size:.66rem;letter-spacing:.13em;text-transform:uppercase;
-  color:var(--ink-3);font-weight:600}
-.bval{margin-left:auto;font-family:var(--mono);font-size:1.35rem;font-weight:600;
-  letter-spacing:-.02em;color:var(--ink)}
-.bval.good{color:var(--good-fg)} .bval.watch{color:var(--watch-fg)}
-.bval.weak{color:var(--weak-fg)}
-.track{position:relative;height:12px;border-radius:2px;overflow:hidden;
-  background:var(--rule-2)}
-.z{position:absolute;top:0;bottom:0}
-.z.good{background:var(--good-bg)} .z.watch{background:var(--watch-bg)}
-.z.weak{background:var(--weak-bg)}
-.move{position:absolute;top:50%;height:2px;transform:translateY(-50%);
-  background:var(--ink-3);opacity:.5}
-.from{position:absolute;top:2px;bottom:2px;width:2px;margin-left:-1px;
-  background:var(--ink-3);opacity:.45;border-radius:1px}
-.tick{position:absolute;top:-3px;bottom:-3px;width:1px;margin-left:-.5px;
-  background:var(--ink);opacity:.55}
-.now{position:absolute;top:-3px;bottom:-3px;width:3px;margin-left:-1.5px;
-  background:var(--ink);border-radius:2px;
-  box-shadow:0 0 0 2px var(--card)}
-.bfoot{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.45rem;
-  font-family:var(--mono);font-size:.63rem;color:var(--ink-3)}
-.delta{margin-left:auto;font-weight:600}
-.delta.up{color:var(--good-fg)} .delta.down{color:var(--weak-fg)}
-@media (max-width:640px){.hero{grid-template-columns:1fr;gap:1.2rem}}
+/* ---------- motion ---------- */
+@keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@keyframes draw{to{stroke-dashoffset:0}}
+
+.co, .matrix, .legend, .notes, .explain, .extable{animation:rise .45s cubic-bezier(.22,.8,.3,1) both}
+.matrix{animation-delay:.05s}
+.legend{animation-delay:.12s}
+.notes{animation-delay:.16s}
+
+.matrix tbody tr{animation:fade .34s ease both}
+.matrix tbody tr:nth-child(1){animation-delay:.06s}
+.matrix tbody tr:nth-child(2){animation-delay:.09s}
+.matrix tbody tr:nth-child(3){animation-delay:.12s}
+.matrix tbody tr:nth-child(4){animation-delay:.15s}
+.matrix tbody tr:nth-child(5){animation-delay:.18s}
+.matrix tbody tr:nth-child(6){animation-delay:.21s}
+.matrix tbody tr:nth-child(7){animation-delay:.24s}
+.matrix tbody tr:nth-child(8){animation-delay:.27s}
+.matrix tbody tr:nth-child(9){animation-delay:.30s}
+.matrix tbody tr:nth-child(10){animation-delay:.33s}
+.matrix tbody tr:nth-child(11){animation-delay:.36s}
+.matrix tbody tr:nth-child(12){animation-delay:.39s}
+.matrix tbody tr:nth-child(n+13){animation-delay:.42s}
+
+/* The trend line traces itself, so the eye follows the direction of travel. */
+.spark polyline{stroke-dasharray:260;stroke-dashoffset:260;
+  animation:draw 1.15s cubic-bezier(.3,.9,.3,1) .3s forwards}
+.spark circle{opacity:0;animation:fade .35s ease 1.25s forwards}
+
+.matrix tbody tr:not(.grp){transition:background .16s ease}
+.matrix tbody tr:not(.grp):hover{background:#F7FAFB}
+.cell, .pc{transition:filter .16s ease}
+.matrix tbody tr:hover .cell{filter:saturate(1.25)}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important; transition:none !important}
+  .spark polyline{stroke-dashoffset:0}
+  .spark circle{opacity:1}
+}
 
 /* streamlit widget tuning */
 .stTextInput input, .stNumberInput input{font-family:var(--mono)}
@@ -427,83 +447,6 @@ st.markdown(
     + "</div></div>",
     unsafe_allow_html=True,
 )
-
-# --------------------------------------------------------------------------
-# 4a. Headroom — the hero
-# --------------------------------------------------------------------------
-# The question a credit committee actually asks is not "what is the ratio" but
-# "how close is this to the line, and which way is it going". Two bands answer
-# that at a glance: leverage against the level most loan agreements test, and
-# coverage against the level below which interest stops being comfortably paid.
-
-STRIP = [
-    ("Debt / EBITDA", 6.0, 3.5, "typical covenant"),
-    ("Interest coverage", 12.0, 2.0, "distress line"),
-]
-
-
-def zones(name: str, scale: float) -> str:
-    """Coloured bands behind the marker, taken from the same thresholds the
-    cells use, so the strip and the table can never disagree."""
-    strong, weak, direction = THRESHOLDS[name]
-    if direction == "lower":
-        cuts = [(0, strong, "good"), (strong, weak, "watch"), (weak, scale, "weak")]
-    else:
-        cuts = [(0, weak, "weak"), (weak, strong, "watch"), (strong, scale, "good")]
-    out = ""
-    for lo, hi, cls in cuts:
-        x = min(lo, scale) / scale * 100
-        w = (min(hi, scale) - min(lo, scale)) / scale * 100
-        if w > 0:
-            out += f'<div class="z {cls}" style="left:{x:.2f}%;width:{w:.2f}%"></div>'
-    return out
-
-
-def headroom(name: str, scale: float, marker: float, marker_label: str) -> str:
-    now = ordered[-1].values.get(name)
-    then = ordered[0].values.get(name) if len(ordered) > 1 else None
-    if now is None:
-        return ""
-
-    pos = lambda v: max(0.0, min(v / scale, 1.0)) * 100
-    moved = ""
-    if then is not None and abs(then - now) / max(abs(now), 1e-9) > 0.02:
-        a, b = sorted((pos(then), pos(now)))
-        moved = (
-            f'<div class="from" style="left:{pos(then):.2f}%"></div>'
-            f'<div class="move" style="left:{a:.2f}%;width:{b - a:.2f}%"></div>'
-        )
-
-    arrow = ""
-    if then is not None:
-        better = (THRESHOLDS[name][2] == "lower") == (now < then)
-        if abs(then - now) / max(abs(now), 1e-9) > 0.02:
-            arrow = (
-                f'<span class="delta {"up" if better else "down"}">'
-                f'{"improving" if better else "worsening"} from {then:,.2f}'
-                f'{"x" if "%" not in ordered[-1].ratios.get(name, "") else "%"}'
-                f' in {ordered[0].label}</span>'
-            )
-
-    return (
-        f'<div class="band"><div class="bhead"><span class="bname">{E(name)}</span>'
-        f'<span class="bval {grade(name, now) or ""}">'
-        f'{E(ordered[-1].ratios.get(name, ""))}</span></div>'
-        f'<div class="track">{zones(name, scale)}{moved}'
-        f'<div class="tick" style="left:{pos(marker):.2f}%"></div>'
-        f'<div class="now" style="left:{pos(now):.2f}%"></div></div>'
-        f'<div class="bfoot"><span>{marker_label} at {marker:g}x</span>{arrow}</div></div>'
-    )
-
-
-if not result.is_financial:
-    bands = "".join(
-        headroom(n, scale, mark, label)
-        for n, scale, mark, label in STRIP
-        if ordered[-1].values.get(n) is not None
-    )
-    if bands:
-        st.markdown(f'<div class="hero">{bands}</div>', unsafe_allow_html=True)
 
 rows_present = [r for r in RATIO_ORDER if any(r in y.ratios for y in ordered)]
 span = len(ordered) + 2
