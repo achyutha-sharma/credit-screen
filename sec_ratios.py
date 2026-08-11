@@ -17,6 +17,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
@@ -250,25 +251,27 @@ class SecClient:
         raise LookupError(f"No SEC filer found for ticker {target}")
 
     def search(self, query: str, limit: int = 12) -> list[dict]:
-        """Find filers by ticker or company name.
+        """Find filers by ticker or company name, forgivingly.
 
-        Exact ticker matches rank first, then names or tickers starting with the
-        query, then names containing it. Someone typing 'home depot' should not
-        have to know the ticker. Within each tier, shorter names sort first, so
-        'NIKE, Inc.' beats a subsidiary with a longer legal name.
+        Four tiers, best first: an exact ticker, a name or ticker that starts
+        with the query, a name that contains it at a word boundary, and finally
+        a fuzzy match for near-misses.
 
-        Every result carries ticker, name and cik. Callers depend on those exact
-        keys -- see run.py and app.py.
+        Comparison strips spaces, dots and ampersands, so "jp morgan" reaches
+        JPMORGAN CHASE and "at&t" reaches AT&T INC. The fuzzy tier only runs
+        when the strict tiers come up short, because it is slower and looser --
+        it is there to rescue "walmrt", not to pad good results with noise.
         """
         data = self._get_json(TICKERS_URL, "company_tickers.json")
-        q = query.strip().lower()
-        if not q:
+        raw = query.strip()
+        if not raw:
             return []
+        q, qn = raw.lower(), _norm(raw)
 
         # Word-boundary match, so "NKE" does not match BRI-NKE-R or BA-NKE-RS.
         inner = re.compile(r"\b" + re.escape(q))
 
-        exact, starts, contains = [], [], []
+        exact, starts, contains, rest = [], [], [], []
         for row in data.values():
             entry = {
                 "ticker": row["ticker"].upper(),
@@ -276,20 +279,48 @@ class SecClient:
                 "cik": str(row["cik_str"]).zfill(10),
             }
             ticker_l, name_l = entry["ticker"].lower(), entry["name"].lower()
-            if ticker_l == q:
+            name_n = _norm(entry["name"])
+            if ticker_l == q or _norm(entry["ticker"]) == qn:
                 exact.append(entry)
-            elif name_l.startswith(q) or ticker_l.startswith(q):
+            elif name_n.startswith(qn) or ticker_l.startswith(q):
                 starts.append(entry)
-            elif inner.search(name_l):
+            elif inner.search(name_l) or (len(qn) >= 5 and qn in name_n):
+                # The normalised test ignores word boundaries, which is how
+                # "jpmorgan" reaches "JPMORGAN CHASE & CO" -- but it is also how
+                # a short query like "nke" would reach BRI-NKE-R. Five
+                # characters is short enough for real names, long enough that
+                # mid-word collisions stop happening.
                 contains.append(entry)
+            else:
+                rest.append((entry, name_n))
 
         starts.sort(key=lambda e: len(e["name"]))
         contains.sort(key=lambda e: len(e["name"]))
+        found = exact + starts + contains
+
+        # Fuzzy rescue for typos, only when the strict tiers are thin.
+        if len(found) < 5 and len(qn) >= 4:
+            scored = []
+            for entry, name_n in rest:
+                if abs(len(name_n) - len(qn)) > max(8, len(qn)):
+                    continue  # cheap length filter before the costly compare
+                # Against the whole name, and against its first word. A
+                # transposition like "nkie" scores poorly against "nikeinc"
+                # but well against "nike", which is what was actually mistyped.
+                head = _norm(entry["name"].split()[0]) if entry["name"].split() else ""
+                score = max(
+                    SequenceMatcher(None, qn, name_n[: len(qn) + 4]).ratio(),
+                    SequenceMatcher(None, qn, head).ratio() if head else 0.0,
+                )
+                if score >= 0.72:
+                    scored.append((score, len(entry["name"]), entry))
+            scored.sort(key=lambda t: (-t[0], t[1]))
+            found += [e for _, _, e in scored[:8]]
 
         # One row per filer. Preferred and multi-class shares list the same CIK
         # under several tickers (CFR and CFR-PB); keep the plainest.
         seen, out = set(), []
-        for e in exact + starts + contains:
+        for e in found:
             if e["cik"] in seen:
                 continue
             seen.add(e["cik"])
@@ -336,6 +367,16 @@ class SecClient:
 
     def facts_for_cik(self, cik: str) -> dict:
         return self.company_facts(str(cik).zfill(10))
+
+
+def _norm(text: str) -> str:
+    """Lowercase, letters and digits only.
+
+    Company names carry punctuation that people do not type: "JPMORGAN CHASE &
+    CO" against "jp morgan", "AT&T INC." against "at&t". Stripping everything
+    but alphanumerics makes those match without loosening the comparison.
+    """
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def parse_cik_from_url(text: str) -> str | None:
