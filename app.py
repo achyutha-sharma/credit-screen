@@ -185,12 +185,40 @@ td.sx b{font-family:var(--mono);font-weight:600;color:var(--accent)}
 .figs td.src.der{color:var(--watch-fg)}
 .figs td.src.gap{color:var(--ink-3);font-style:italic}
 
+/* ---------- brand ---------- */
+.brand{display:flex;align-items:center;gap:.65rem}
+.logo{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;
+  border-radius:7px;background:linear-gradient(150deg,var(--accent),#1B6C7F);
+  color:#fff;font-weight:700;font-size:.82rem;letter-spacing:.02em;
+  box-shadow:0 2px 6px -2px rgba(16,73,91,.55)}
+.brand > span:last-child{display:flex;flex-direction:column}
+
+/* ---------- company header ---------- */
+.cohead{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+.tick{font-family:var(--mono);font-size:.72rem;font-weight:600;letter-spacing:.06em;
+  color:var(--accent);background:var(--accent-soft);border:1px solid #CFE0E5;
+  padding:.22rem .5rem;border-radius:3px}
+.pills{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.55rem}
+.pill{font-family:var(--mono);font-size:.65rem;font-weight:600;letter-spacing:.05em;
+  padding:.22rem .55rem;border-radius:11px}
+.pill.good{background:var(--good-bg);color:var(--good-fg)}
+.pill.watch{background:var(--watch-bg);color:var(--watch-fg)}
+.pill.weak{background:var(--weak-bg);color:var(--weak-fg)}
+.pill.none{background:var(--rule-2);color:var(--ink-3)}
+
+/* ---------- search ---------- */
+div[data-testid="stTextInput"]:first-of-type input{
+  background:linear-gradient(180deg,#F7FAFB,#EFF4F6);
+  border:1px solid #CBD8DD;font-size:1.02rem;padding:.85rem 1rem}
+div[data-testid="stTextInput"]:first-of-type input:focus{
+  background:var(--card);border-color:transparent}
+
 /* ---------- motion ---------- */
 @keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 @keyframes draw{to{stroke-dashoffset:0}}
 
-.co, .matrix, .legend, .notes, .explain, .extable{animation:rise .45s cubic-bezier(.22,.8,.3,1) both}
+.co, .pills, .matrix, .legend, .notes, .explain, .extable{animation:rise .45s cubic-bezier(.22,.8,.3,1) both}
 .matrix{animation-delay:.05s}
 .legend{animation-delay:.12s}
 .notes{animation-delay:.16s}
@@ -302,8 +330,9 @@ tells you what is actually going on.
 _mast, _about = st.columns([5, 1], vertical_alignment="bottom")
 with _mast:
     st.markdown(
-        '<div class="mark">Credit<span>Screen</span></div>'
-        '<div class="tag">Ratios from SEC filings</div>',
+        '<div class="brand"><span class="logo">CS</span>'
+        '<span><span class="mark">Credit<span>Screen</span></span>'
+        '<span class="tag">Ratios from SEC filings</span></span></div>',
         unsafe_allow_html=True,
     )
 with _about:
@@ -494,8 +523,22 @@ DIRECTION = {
     "Asset turnover": "",
 }
 
+counts = {"good": 0, "watch": 0, "weak": 0, "none": 0}
+for _n in RATIO_ORDER:
+    if _n in ordered[-1].ratios:
+        counts[grade(_n, ordered[-1].values.get(_n)) or "none"] += 1
+pills = "".join(
+    f'<span class="pill {k}">{v} {lab}</span>'
+    for k, lab in (("good", "strong"), ("watch", "watch"),
+                   ("weak", "weak"), ("none", "not scored"))
+    if (v := counts[k])
+)
+
 st.markdown(
-    f'<div class="co"><h2>{E(result.entity)}</h2><div class="meta">'
+    f'<div class="co"><div class="cohead">'
+    f'<span class="tick">{E(chosen["ticker"])}</span>'
+    f'<h2>{E(result.entity)}</h2></div>'
+    f'<div class="pills">{pills}</div><div class="meta">'
     + "".join(
         f"<span>{E(t)}</span>"
         for t in filter(None, (
