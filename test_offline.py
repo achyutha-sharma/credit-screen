@@ -884,3 +884,42 @@ def _fuzzy_search_checks():
 
 
 _fuzzy_search_checks()
+
+
+def _export_checks():
+    """The CSV must carry provenance, not just numbers."""
+    from sec_ratios import to_csv
+    import csv, io
+
+    a = analyze(healthy)
+    text = to_csv(a, ticker="SIC", cik="0000000001")
+    rows = list(csv.reader(io.StringIO(text)))
+    flat = {r[0] for r in rows if r}
+
+    assert "Credit Screen - ratio export" in flat
+    assert ["Company", a.entity] in rows
+    assert ["Ticker", "SIC"] in rows
+    assert "Ratios" in flat and "Inputs ($ millions)" in flat
+
+    # Every ratio appears once, tagged with its group and its standing.
+    ratio_rows = [r for r in rows if r and r[0] in
+                  {"Liquidity", "Leverage", "Profitability", "Efficiency"}]
+    assert len(ratio_rows) == 11, len(ratio_rows)
+    assert all(r[-1] in {"good", "watch", "weak", "not scored"} for r in ratio_rows)
+
+    # The source column travels with the export -- that is the point.
+    header = next(r for r in rows if r and r[0] == "Figure")
+    assert header[-1].startswith("Source"), header
+    ni = next(r for r in rows if r and r[0] == "Net income")
+    assert ni[-1] == "NetIncomeLoss", ni
+
+    # A derived figure says so in the export, not just on screen.
+    derived = analyze(bank)
+    dtext = to_csv(derived)
+    assert "derived:" in dtext, dtext[:400]
+    assert "Notes" in dtext
+
+    print("Export checks passed.")
+
+
+_export_checks()
